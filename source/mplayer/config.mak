@@ -32,11 +32,11 @@ INSTALL = install
 INSTALLSTRIP = -s
 WINDRES = windres
 
-EXTRA_INC = -I$(DEVKITPRO)/portlibs/ppc/include -I$(DEVKITPRO)/libogc2/include -I$(DEVKITPRO)/portlibs/ppc/include/freetype2 -I$(DEVKITPRO)/libogc2/include/ogc/machine -I$(DEVKITPPC)/../buildscripts/powerpc-eabi/gcc/gcc/include
+EXTRA_INC = -I$(DEVKITPRO)/portlibs/ppc/include -I$(DEVKITPRO)/libogc2/gamecube/include -I$(DEVKITPRO)/portlibs/ppc/include/freetype2 -I$(DEVKITPRO)/libogc2/gamecube/include/ogc/machine
 WIIFLAGS = -DGEKKO -mogc -mcpu=750 -meabi -msdata -mmultiple -frename-registers
 
 CFLAGS   = -Wundef -Wall -Wno-switch -Wno-parentheses -Wpointer-arith -Wredundant-decls -Wmissing-prototypes -Wdisabled-optimization -Wno-pointer-sign -Wdeclaration-after-statement -std=gnu99  -O2 -mcpu=750 -meabi -mogc -msdata -mmultiple -pipe -g -ffast-math -frename-registers -DGEKKO -DHW_DOL -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE -Ilibdvdread4 $(EXTRA_INC) -I. -Iffmpeg  -DFF_API_MAX_STREAMS=0
-CXXFLAGS = -Wundef -Wall -Wno-switch -Wno-parentheses -Wpointer-arith -Wredundant-decls  -O2 -mcpu=750 -meabi -mogc -msdata -mmultiple -pipe -g -ffast-math -frename-registers -DGEKKO -DHW_DOL -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_LIMIT_MACROS -Ilibdvdread4 -I$(DEVKITPRO)/portlibs/ppc/include -I$(DEVKITPRO)/libogc2/include -I. -Iffmpeg  -DFF_API_MAX_STREAMS=0
+CXXFLAGS = -Wundef -Wall -Wno-switch -Wno-parentheses -Wpointer-arith -Wredundant-decls  -O2 -mcpu=750 -meabi -mogc -msdata -mmultiple -pipe -g -ffast-math -frename-registers -DGEKKO -DHW_DOL -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -D_LARGEFILE64_SOURCE -D__STDC_CONSTANT_MACROS -D__STDC_LIMIT_MACROS -Ilibdvdread4 -I$(DEVKITPRO)/portlibs/ppc/include -I$(DEVKITPRO)/libogc2/gamecube/include -I. -Iffmpeg  -DFF_API_MAX_STREAMS=0
 CC_DEPFLAGS = -MD -MP -O2 -mcpu=750 -meabi -mogc -msdata -mmultiple -pipe -g -ffast-math -frename-registers
 
 CFLAGS_DHAHELPER         = 
@@ -49,7 +49,7 @@ CFLAGS_STACKREALIGN      =
 CFLAGS_SVGALIB_HELPER    = 
 CFLAGS_TREMOR_LOW        = 
 
-EXTRALIBS = -L$(DEVKITPRO)/libogc2/lib/wii -L$(DEVKITPRO)/portlibs/ppc/lib
+EXTRALIBS = -L$(DEVKITPRO)/libogc2/gamecube/lib -L$(DEVKITPRO)/portlibs/ppc/lib
 EXTRALIBS += -static $(COMMONFLAGS) -lfreetype -liconv -lz -ljpeg -ldi -logc -lm
 EXTRALIBS_MPLAYER  = 
 EXTRALIBS_MENCODER = 

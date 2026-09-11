@@ -46,7 +46,8 @@ LDFLAGS		=	-g $(MACHDEP) -Wl,-wrap,memcpy
 #---------------------------------------------------------------------------------
 LIBS    := -lmplayerwii -lavformat -lavcodec -lswscale -lavutil \
                         -ljpeg -liconv -lpng -lz \
-                        -lfat -logc -lfreetype -lmxml -lexif
+                        -lfat -logc -lfreetype -lmxml -lexif \
+                        -lbrotlidec -lbrotlicommon -lbz2
 
 ifeq ($(ENABLE_NTFS), 1)
 CFLAGS += -DWANT_NTFS
@@ -123,7 +124,7 @@ export OFILES	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) \
 export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 					$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
 					-I$(CURDIR)/$(BUILD) \
-					-I$(LIBOGC_INC) -I$(PORTLIBS)/include/freetype2
+					-I$(LIBOGC_INC) $(foreach dir,$(LIBDIRS),-I$(dir)/include/freetype2)
 
 #---------------------------------------------------------------------------------
 # build a list of library paths

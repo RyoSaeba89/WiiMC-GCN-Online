@@ -1,0 +1,39 @@
+# Final products
+/wiimc.elf
+/wiimc.dol
+*.elf.map
+
+# The build/ directory is not ignored wholesale: build/wiimc.ld and
+# build/wiimc.spec are part of the tree and must stay tracked. Only what the
+# compiler puts there is ignored.
+/build/*.o
+/build/*.d
+/build/*.h
+/build/*.ii
+/build/*.lst
+/build/*.map
+/build/*.s
+
+# MPlayer and FFmpeg are built in place, inside source/mplayer. Note that the
+# upstream tree already tracks 319 .d files and 5 .o files under
+# source/mplayer/ffmpeg/libavcodec/libopus/; ignoring a pattern does not
+# untrack what is already committed, so those still show as modified after a
+# build. That is upstream's doing, not ours, and is left alone.
+*.o
+*.a
+*.d
+*.ho
+source/mplayer/ffmpeg/libavutil/avconfig.h
+
+# Host tools the cross build makes for itself
+source/mplayer/codec-cfg
+source/mplayer/codec-cfg.exe
+source/mplayer/ffmpeg/**/*_tablegen
+source/mplayer/ffmpeg/**/*_tablegen.exe
+
+# Editor and OS droppings
+*.orig
+*.rej
+*~
+.DS_Store
+Thumbs.db

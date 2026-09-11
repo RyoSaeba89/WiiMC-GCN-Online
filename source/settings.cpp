@@ -295,7 +295,9 @@ static const char * XMLSaveCallback(mxml_node_t *node, int where)
 {
 	const char *name;
 
-	name = node->value.element.name;
+	/* mxml 3.x made mxml_node_t opaque; the accessor exists from 2.7 on,
+	 * so this reads correctly against either version. */
+	name = mxmlGetElement(node);
 
 	if(where == MXML_WS_BEFORE_CLOSE)
 	{

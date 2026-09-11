@@ -9,6 +9,9 @@
 
 #include <stdio.h>
 #include <malloc.h>
+/* libpng no longer drags string.h in transitively; this file has always
+ * used memcpy, memset, strlen and strcpy. */
+#include <string.h>
 #include <png.h>
 #include "pngu.h"
 
