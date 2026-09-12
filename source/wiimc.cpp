@@ -33,6 +33,7 @@
 
 #include "utils/FreeTypeGX.h"
 #include "utils/gettext.h"
+#include "utils/debuglog.h"
 //#include "utils/mem2_manager.h"
 #include "video.h"
 #include "networkop.h"
@@ -289,7 +290,15 @@ const devoptab_t gecko_out = {
 #endif
 static void USBGeckoOutput()
 {
+#ifndef WANT_DEBUGLOG
 	gecko = usb_isgeckoalive(1); // uncomment to enable USB Gecko output
+#else
+	// EXI channel 1 is memory card slot B, where PORTING.md 5.1 recommends
+	// the SD Gecko. A USB Gecko probe there sends Gecko protocol to the SD
+	// adapter; DKR-GC lost its log card to exactly that. Nothing in this
+	// build reads `gecko`, so the probe is skipped.
+	gecko = false;
+#endif
 
 	LWP_MutexInit(&gecko_mutex, false);
 
@@ -593,7 +602,9 @@ extern "C" bool FindNextFile(bool load)
 static void *
 mplayerthread (void *arg)
 {
+	DebugMark("mplayer: thread started");
 	mplayer_main();
+	DebugMark("mplayer: mplayer_main returned");
 	return NULL;
 }
 
@@ -638,6 +649,7 @@ bool InitMPlayer()
 
 	if(appPath[0] == 0)
 	{
+		DebugMark("mplayer: init FAILED, no sd1:/apps/%s folder", APPFOLDER);
 		InfoPrompt("Unable to Initialize MPlayer", "Unable to find a valid working path");
 		return false;
 	}
@@ -645,6 +657,7 @@ bool InitMPlayer()
 	if(chdir(appPath) != 0)
 	{
 		wchar_t msg[512];
+		DebugMark("mplayer: init FAILED, chdir(%s)", appPath);
 		swprintf(msg, 512, L"%s %s", gettext("Unable to change path to"), appPath);
 		InfoPrompt("Unable to Initialize MPlayer", msg);
 		return false;
@@ -729,8 +742,11 @@ bool InitMPlayer()
 
 	// create mplayer thread
 	mplayerstack=(u8*)(memalign(32,MPLAYER_STACKSIZE*sizeof(u8)));
+	if(mplayerstack == NULL)
+		DebugMark("mplayer: init FAILED, no memory for the %d KB thread stack", MPLAYER_STACKSIZE/1024);
 	memset(mplayerstack,0,MPLAYER_STACKSIZE*sizeof(u8));
 	LWP_CreateThread (&mthread, mplayerthread, NULL, mplayerstack, MPLAYER_STACKSIZE, 68);
+	DebugMark("mplayer: init done, data dir %s", appPath);
 
 	init = true;
 	return true;
@@ -826,6 +842,7 @@ void LoadMPlayerFile()
 		usleep(100);
 	
 	// set new file to load
+	DebugMark("play: %s", loadedFile);
 	wiiLoadFile(loadedFile, partitionlabel);
 
 	while(controlledbygui != 0)
@@ -1183,11 +1200,17 @@ int main(int argc, char *argv[])
 	ARQ_Reset();
 #endif
 	//L2Enhance();
+	DebugLogInit(); // first: everything after this is recorded
 	USBGeckoOutput(); // don't disable - we need the stdout/stderr devoptab!
+	DebugMark("boot: AUDIO_Init");
 	AUDIO_Init(NULL);
+	DebugMark("boot: DSP_Init");
 	DSP_Init();
 	AUDIO_StopDMA();
+	DebugMark("boot: InitVideo");
 	InitVideo();
+	DebugLogScreenShow(); // InitVideo blanks the display until InitVideo2
+	DebugMark("boot: video ok");
 
 	// Wii Power/Reset buttons
 	//__STM_Close();
@@ -1197,7 +1220,13 @@ int main(int argc, char *argv[])
 	//SYS_SetPowerCallback(ShutdownCB);
 	SYS_SetResetCallback(ResetCB);
 	
+#ifdef WANT_DEBUGLOG
+	// No countdown: the register dump stays up until Z or RESET, long enough
+	// to photograph. The same report is on the card either way.
+	__exception_setreload(0);
+#else
 	__exception_setreload(8);
+#endif
 
 #if 0
 	// path sent by the plugin's argument
@@ -1223,7 +1252,12 @@ int main(int argc, char *argv[])
 #endif
 	//USBStorage_Initialize(); // to set aside MEM2 area
 
+	DebugMark("boot: FindAppPath");
 	FindAppPath(); // Initialize SD and USB devices and look for apps/wiimc
+	DebugMark("boot: creating the log file");
+	DebugLogAttachCard(); // needs sd1:, and flushes everything logged so far
+	DebugMark("boot: app path '%s'%s", appPath,
+		appPath[0] ? "" : " -- NOT FOUND, playback will refuse to start");
 	
 	//StartNetworkThread(); //to set net heap aside MEM2 area
 	//usleep(100); //force network thread execution
@@ -1246,7 +1280,10 @@ int main(int argc, char *argv[])
 	BrowserInit(&browserMusic);
 	BrowserInit(&browserOnlineMedia);
 
+	DebugMark("boot: InitVideo2 -- the boot trace leaves the screen here");
 	InitVideo2();
+	DebugLogScreenEnd();
+	DebugMark("boot: video2 ok");
 	SetupPads();
 	//WPAD_SetPowerButtonCallback((WPADShutdownCallback)ShutdownCB);
 
@@ -1254,7 +1291,11 @@ int main(int argc, char *argv[])
 	srand (time (0)); // random seed
 
 	if(!InitFreeType((u8*)font_ttf, font_ttf_size)) // Initialize font system
+	{
+		DebugMark("boot: InitFreeType FAILED, returning from main");
 		return 0;
+	}
+	DebugMark("boot: freetype ok");
 
 	// mplayer cache thread
 	memset(cachestack,0,CACHE_STACKSIZE*sizeof(u8));
@@ -1266,13 +1307,16 @@ int main(int argc, char *argv[])
  	while(1)
 	{
 		ResetVideo_Menu();
+		DebugMark("main: WiiMenu");
  		WiiMenu();
 
  		if(ExitRequested)
  			break;
- 
+
+		DebugMark("main: MPlayerMenu");
 		MPlayerMenu();
 	}
+	DebugMark("main: exit requested");
  	
  	// application exiting
 	SuspendDeviceThread();

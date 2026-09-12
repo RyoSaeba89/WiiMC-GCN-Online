@@ -35,6 +35,10 @@ ENABLE_WIIMOTE                = 0
 ENABLE_SMB                    = 0
 ENABLE_3DS                    = 0
 
+# Log file, crash report and hang diagnostics on sd1:/wiimc.log.
+# See source/utils/debuglog.c and PORTING.md section 11.
+ENABLE_DEBUGLOG               = 1
+
 
 CFLAGS		=	-g -O2 -Wall $(MACHDEP) $(INCLUDE)  \
 				-D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -Wframe-larger-than=8192
@@ -72,6 +76,18 @@ endif
 
 ifeq ($(ENABLE_3DS), 1)
 CFLAGS += -DWANT_3DS
+endif
+
+# Every wrap below is a call from one object file to a symbol defined in
+# another, which is the only kind --wrap can intercept. The exception handler
+# one is how the crash report gets in: libogc's assembly vector routine calls
+# c_default_exceptionhandler after saving the frame.
+ifeq ($(ENABLE_DEBUGLOG), 1)
+CFLAGS += -DWANT_DEBUGLOG -DWIIMC_BUILD_ID=\"$(BUILD_ID)\"
+LDFLAGS += -Wl,--wrap=c_default_exceptionhandler \
+           -Wl,--wrap=exit -Wl,--wrap=abort -Wl,--wrap=__assert_func \
+           -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=memalign \
+           -Wl,--wrap=LWP_CreateThread
 endif
 
 #---------------------------------------------------------------------------------
@@ -139,13 +155,51 @@ export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib) \
 				-L$(MPLAYER)/ffmpeg/libswscale 
 
 export OUTPUT	:=	$(CURDIR)/$(TARGET)
-.PHONY: $(BUILD) clean
+.PHONY: $(BUILD) clean deploy
 
 #---------------------------------------------------------------------------------
+# Every build is deployed to the SD card when it is plugged in.
+#
+# SDCARD is the card as MSYS2 sees it (F: is /f). A drive only counts as the
+# card if it already has apps/wiimc/, so a different removable drive on the
+# same letter is never written to. Override with: make -f Makefile.gc SDCARD=/g
+#
+# BUILD_ID names the build in three places that must agree: the header of
+# sd1:/wiimc.log, the ELF archived in deployed/, and the make output. It is
+# ?= so that the sub-makes below inherit the value rather than re-reading the
+# clock.
+#---------------------------------------------------------------------------------
+SDCARD			?=	/f
+export BUILD_ID	?=	$(shell date +%Y%m%d-%H%M%S)
+DEPLOY_KEEP		:=	8
+
 $(BUILD):
 	cd source/mplayer; $(MAKE) -f Makefile; cd ../..
 	@[ -d $@ ] || mkdir -p $@
+	@rm -f $(BUILD)/debuglog.o
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile.gc
+	@make --no-print-directory -f $(CURDIR)/Makefile.gc deploy
+
+deploy:
+	@if [ ! -d "$(SDCARD)/apps/wiimc" ]; then \
+		echo "deploy: no card at $(SDCARD) (no apps/wiimc/), skipped"; \
+		exit 0; \
+	fi; \
+	mkdir -p logs deployed; \
+	for f in wiimc.log wiimc-prev.log wiimc-crash.txt wiimc-crash-prev.txt; do \
+		if [ -f "$(SDCARD)/$$f" ]; then \
+			dst="logs/$$(date -r "$(SDCARD)/$$f" +%Y%m%d-%H%M%S)-$$f"; \
+			[ -f "$$dst" ] || { cp -p "$(SDCARD)/$$f" "$$dst" && echo "deploy: fetched $$dst"; }; \
+		fi; \
+	done; \
+	cp $(OUTPUT).dol "$(SDCARD)/$(TARGET).dol" && sync; \
+	[ "$$(md5sum < $(OUTPUT).dol)" = "$$(md5sum < "$(SDCARD)/$(TARGET).dol")" ] || \
+		{ echo "deploy: FAILED, $(SDCARD)/$(TARGET).dol differs from the build"; exit 1; }; \
+	id=$$(grep -ao 'boot trace, build [0-9]*-[0-9]*' $(OUTPUT).dol | head -n 1 | sed 's/.* //'); \
+	[ -n "$$id" ] || id=unknown-$(BUILD_ID); \
+	[ -f "deployed/$(TARGET)-$$id.elf" ] || cp $(OUTPUT).elf "deployed/$(TARGET)-$$id.elf"; \
+	ls -1t deployed/$(TARGET)-*.elf | tail -n +$$(( $(DEPLOY_KEEP) + 1 )) | xargs -r rm -f; \
+	echo "deploy: $(TARGET).dol -> $(SDCARD)/ (build $$id, elf in deployed/)"
 
 #---------------------------------------------------------------------------------
 test:

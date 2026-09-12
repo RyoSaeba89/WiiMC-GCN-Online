@@ -464,12 +464,13 @@ Install `ppc-mxml`, `ppc-libexif`, `ppc-libiconv`; repair the stale paths in
 > **Done when** an unmodified `wiimc.dol` built here plays a file from the card
 > on the console. Until then no regression can be attributed to anything.
 
-**Status: builds clean, not yet booted.** The five problems of §7.3 are fixed
-and `make -f Makefile.gc` produces a 5.7 MB `wiimc.dol` with no errors. The
-functional half of the criterion — that it boots from an SD Gecko and plays a
-file — needs the console and has not been done. **Phase 1 does not start until
-it has**, because a baseline that has only ever been compiled proves nothing
-about the four phases that follow.
+**Status: builds clean, crashes on the console with nothing on screen.** The
+five problems of §7.3 are fixed and `make -f Makefile.gc` produces a 5.7 MB
+`wiimc.dol` with no errors. The first hardware run (2026-09-12) crashed without
+a register dump, and the tree had no way to say why: §11 adds the log that
+does. **Phase 1 does not start until the baseline plays a file**, because a
+baseline that has only ever been compiled proves nothing about the four phases
+that follow.
 
 ### Phase 1 — switch the transport back on
 
@@ -546,3 +547,215 @@ visible at all.
 
 `storage.h` is deliberately **not** ported: this tree mounts one volume as
 `sd1:` and has no search order to express (§5.2).
+
+---
+
+## 11. The debug log
+
+### 11.1 Why it exists
+
+The first boot on hardware crashed and the screen showed no register dump. On
+this console that is not unusual, it is the norm, because upstream left the
+program with **no diagnostic channel at all**: `SaveLogToSD()` is under `#if 0`,
+the stdout devoptab that fed the USB Gecko is under `#if 0`, and nobody boots
+from Swiss with a Gecko attached anyway. Meanwhile most of the ways this
+program can die are silent by construction:
+
+| Death | What the screen shows |
+|---|---|
+| `exit()` or `main()` returning | back to the loader, nothing |
+| `InitMPlayer()` failing — e.g. no `sd1:/apps/wiimc/` folder | one prompt, then `ExitRequested` and back to the loader (`source/menu.cpp`, `WiiMenu()`) |
+| `InitFreeType()` failing | `return 0` from `main()`, back to the loader |
+| a hang or deadlock | the last frame, frozen |
+| a stack overflow | nothing, or an unrelated fault much later |
+| `malloc` returning NULL | a DSI somewhere else, with the cause gone |
+| a CPU exception | libogc's dump for **8 seconds**, then back to the loader |
+
+The last row is worth knowing on its own: `__exception_setreload(8)` in
+`main()` means a dump that is not photographed within eight seconds looks
+exactly like every other row of this table.
+
+### 11.2 What was built
+
+`source/utils/debuglog.c`, switched on by `ENABLE_DEBUGLOG = 1` in
+`Makefile.gc` (on by default for now). It is DKR-GC's
+`platform/gc/gc_logfile.c` and `gc_crash.c` adapted to this tree; DKR-GC's
+`PORTING.md` records the hardware runs that paid for each design rule, and
+they are not repeated here beyond the one-line reasons in the source.
+
+| Silent death | Instrument |
+|---|---|
+| CPU exception | `-Wl,--wrap=c_default_exceptionhandler`: a report written without printf into RAM, then to the card, then libogc's dump. The reload countdown is off, so the dump stays until Z or RESET |
+| `exit`, `abort`, `assert` | wrapped at link time; the caller's address is logged and flushed before the real call |
+| hang | a heartbeat thread at priority 100 every 2 s, and a dump of every thread's state and parked stack every 10 s |
+| stack overflow | `LWP_CreateThread` wrapped: every stack is painted, its high-water mark reported, an overflow marked |
+| out of memory | `malloc`, `calloc`, `realloc`, `memalign` wrapped: a NULL return is recorded with size and caller |
+| MPlayer's own errors | stdout and stderr redirected into the log |
+
+Plus breadcrumbs (`DebugMark`) through `main()`, the SD mount, the menu loop,
+MPlayer initialisation and each file load.
+
+One behaviour change comes with it: `usb_isgeckoalive(1)` is no longer called.
+Channel 1 is memory card slot B, where §5.1 recommends the SD Gecko, and
+DKR-GC's log card was ruined by Gecko traffic on exactly that slot. Nothing in
+this build reads the result.
+
+Confirmed in the linked ELF, not assumed: every call site of the nine wrapped
+symbols goes to its `__wrap_` function; the single direct call left for each is
+the wrapper's own `__real_` call.
+
+**Untested off hardware.** Dolphin emulates no SD reader on the GameCube
+(gcradio `DOC.md`, the Dolphin section), so the card side of this cannot run
+anywhere but the console.
+
+### 11.3 Where the files are
+
+| File | Contents |
+|---|---|
+| `sd1:/wiimc.log` | this run |
+| `sd1:/wiimc-prev.log` | the run before — **the one to read after a crash and a reboot** |
+
+At the root of the card that was mounted as `sd1:`, whatever the slot. If the
+log says `sd: NOTHING mounted`, or neither file exists, the card was never
+mounted and nothing after that point could be written.
+
+The file is created at 256 KB at boot and overwritten in place, so it is mostly
+blank lines in an editor. The body wraps under the boot header when full; the
+newest line is just above `<<<<<<<< end of log >>>>>>>>`. The last 24 KB are
+reserved, and a crash report, if any, is **at the very end of the file**.
+
+### 11.4 Reading it
+
+The shape of a run (the numbers are illustrative, not from a real one):
+
+```
+[    0.012] boot: log started; main thread stack 806f36c8 size 16384 sp 806f7580
+[    0.310] boot: audio ok
+...
+[    3.004] sd: sd1: mounted via SD Gecko in slot B
+[    4.871] boot: app path 'sd1:/apps/wiimc'
+[    5.402] menu: 1
+[    7.402] hb 1 | oom 0 | last [    5.402] menu: 1
+            mem free 9120K (in heap 610K + never claimed 8510K), low 9120K, heap 4410K
+            thr #0  entry 00000000 prio  64 state 00000000 stack 11204/16384 sp ... | 8001f2a4 ...
+```
+
+- **The last breadcrumb before the log stops** says how far the run got.
+- **`hb` lines that keep coming while `last` stays put** is a hang with the
+  scheduler alive: the thread dump shows which thread is parked where.
+- **`hb` lines that stop** mean interrupts are off or the machine is dead; the
+  last one written is the last moment it was alive.
+- **`EXIT:`, `ABORT:`, `ASSERT:`** name the quiet deaths of §11.1 directly.
+- **`OUT OF MEMORY`** lists each failing call site; `low` in the `mem` line is
+  the least free memory seen, and on this 24 MB machine it is the number to
+  watch (§9).
+- **`STACK OVERFLOW`**, or a `stack used/size` close to its size: the 16 KB
+  main thread runs the whole menu, and the GUI threads have fixed stacks too.
+
+A `CRASH` block gives `srr0` (the faulting instruction), `lr`, `dar` (for a
+DSI, the address that was refused), the breadcrumb, the faulting thread, all
+32 registers, stack usage per thread, and the code addresses found on the
+faulting stack. Every address resolves against **the ELF built with the
+`.dol` that ran**:
+
+```sh
+powerpc-eabi-addr2line -f -C -e wiimc.elf 0x8001f2a4 0x80034ad0
+```
+
+Keep `wiimc.elf` from each build that goes onto the card; a rebuilt ELF gives
+wrong answers without any warning.
+
+### 11.5 Deployment to the card
+
+Every `make -f Makefile.gc` ends with a `deploy` step, which on this machine
+does three things when the SD card is plugged in as `F:`:
+
+1. **Fetches the logs first.** `wiimc.log` and `wiimc-prev.log` are copied
+   into `logs/`, named by their modification time, before anything on the card
+   changes. A log already fetched is not copied twice.
+2. **Writes `wiimc.dol`** to the root of the card and checks it back by MD5.
+3. **Archives the ELF** as `deployed/wiimc-<build id>.elf`, keeping the last
+   eight. The same build id is in the `build` line at the top of the log, so
+   the ELF to hand to `addr2line` is never a guess.
+
+A drive only counts as the card if `apps/wiimc/` already exists on it, so no
+other removable drive on that letter is ever written to. With no card, the step
+says so and the build still succeeds. Another letter: `make -f Makefile.gc
+SDCARD=/g`; deploy alone, without building: `make -f Makefile.gc deploy`.
+
+`logs/` and `deployed/` are ignored by git.
+
+### 11.6 First findings (2026-09-12)
+
+**The second hardware run wrote no `wiimc.log` at all.** So the run died
+before the log file could be created — before, or during, the SD mount in
+`FindAppPath()`.
+
+**Why nothing is ever visible there.** `InitVideo()` ends in
+`VIDEO_SetBlack(TRUE)`, and no framebuffer exists until `InitVideo2()`, which
+runs *after* `FindAppPath()`. Anything that dies in that window — including a
+CPU exception, whose libogc dump draws into the current framebuffer — shows a
+black screen. The boot console (`DebugLogScreenShow()`) now fills that window
+with the breadcrumbs, and gives libogc's dump a framebuffer to draw into.
+
+**Dolphin is useful after all, for everything before the card.** It has no SD
+reader, but it runs this program up to the menu, and with the boot console it
+shows how far the boot got. It found two faults, both of the same kind:
+
+1. `_rename_r` read `0x00000030`. That one was the log's own: `rename()` on
+   `sd1:` with nothing mounted. **newlib's `_rename_r` and `mkdir` do not
+   check `FindDevice()` for -1** — they index `devoptab_list[-1]`. Guarded in
+   `DebugLogAttachCard()`.
+2. `mkdir` read `0x00000034`. That one is **upstream's**, and it is a
+   plausible match for the hardware crash: with no card mounted,
+   `LoadSettings()` fails, `SaveSettings()` then calls `mkdir("sd1:/apps")`,
+   and the `CheckMount(DEVICE_SD, 1)` that should have prevented it is
+   commented out (`source/settings.cpp`). The "Could not find SD card" prompt
+   below it was unreachable. The check is restored with `FindDevice("sd1:")`;
+   under Dolphin the prompt now appears over the WiiMC menu.
+
+If that is what happened on the console, the real question is not the crash
+but **why `sd1:` did not mount on hardware from a card Swiss boots from**. The
+boot console now names each interface as it is probed (`sd: trying ...`) and
+which one mounted.
+
+**The third hardware run faulted in the log itself** (photo of 2026-09-12,
+build `20260912-220053`): DSI, `SRR0 80033ef8` = `paint_range`, called from
+`paint_live_stack` in `DebugLogInit`, `DAR 806edf20`, `DSISR 02400000`, and
+`r8 = 57ac57ac`, the paint pattern. `02400000` is a store **and a DABR
+match**. libogc2 arms the DABR — the CPU's data address breakpoint — on a
+doubleword near the bottom of every thread's stack as an overflow guard, and
+`_cpu_context_switch` reloads it per thread from `context.dabr`. Painting the
+live main-thread stack from the bottom wrote straight into the guard.
+**Dolphin does not emulate the DABR**, which is why the same build ran there.
+
+The paint now reads the running thread's guard from SPR 1013 and never writes
+or reads that doubleword; the trampoline records each thread's guard the same
+way. Worth remembering beyond this file: **on libogc2, any code that scans or
+fills a thread's stack from the bottom will trip this guard.**
+
+So the hardware has not yet run far enough to show the original crash.
+
+**The fourth hardware run reached the menu** (build `20260912-222345`, log in
+`logs/`). The SD mounted through the SD Gecko in slot B at 0.3 s; the menu was
+up at 0.6 s with all ten threads created. Input did work: the main loop logged
+`menu: 3` (`MENU_SETTINGS`) at 10.196 s. The machine died within 300 ms of
+that — the heartbeat due at 10.5 s never came — and **no CRASH block reached
+the log**. Also in that log:
+
+- `STACK OVERFLOW` on the heartbeat thread was **false**: libogc2's
+  `__lwp_thread_loadenv` writes a `0xDEADBABE` canary on the base word of every
+  stack, and arms the DABR (write only, flags 6) on the base rounded up to 8.
+  The heartbeat's static stack is not 8-aligned, so the scan read the canary.
+  Everything below the end of that doubleword is now left alone.
+- The device thread was parked in `__gcode_IsInserted`: it polls the GC Loader
+  interface every two seconds on a console that has none. Not yet known to
+  matter; noted.
+
+Why no report is a guess until the next run, but a good one: the report path
+opened the log with `fopen`, which allocates from the heap under newlib's
+malloc lock — the first casualty of a crash in C++ GUI code. The report now
+goes first to `sd1:/wiimc-crash.txt`, created at boot and **held open** by
+descriptor, so the crash path needs only `lseek`/`write`/`fsync`. A report
+from the previous run is kept as `wiimc-crash-prev.txt`; `deploy` fetches all
+four files.

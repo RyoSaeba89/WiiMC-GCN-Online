@@ -13,6 +13,7 @@
 #include <ogcsys.h>
 #include <mxml.h>
 #include <ogc/conf.h>
+#include <sys/iosupport.h>
 
 #include "wiimc.h"
 #include "menu.h"
@@ -64,12 +65,12 @@ LANG languages[LANGUAGE_SIZE] = {
 	{ "Dansk", "da", "dan" },*/
 	{ "English", "en", "eng" },
 	//{ "Esperanto", "eo", "epo" },
-	{ "Español", "es", "spa" },
+	{ "Espaï¿½ol", "es", "spa" },
 	/*{ "Estonian", "et", "est" },
 	{ "Finnish", "fi", "fin" },
 	{ "Fiji", "fj", "fij" },
 	{ "Faroese", "fo", "fao" }, */
-//	{ "Français", "fr", "fre" },
+//	{ "Franï¿½ais", "fr", "fre" },
 /*	{ "Frisian", "fy", "fry" },
 	{ "Galician", "gl", "glg" },
 	{ "Georgian", "ka", "geo" },
@@ -1110,7 +1111,10 @@ SaveSettings (bool silent)
 	else
 	{
 		// populate list of potential paths
-		//if(CheckMount(DEVICE_SD, 1))
+		// The mount check matters: with no sd1: device, newlib's mkdir below
+		// indexes devoptab_list[-1] and faults instead of failing, so the
+		// "Could not find SD card" prompt could never be reached.
+		if(FindDevice("sd1:") >= 0)
 			sprintf(path[d++], "sd1:/apps/%s", APPFOLDER);
 
 #if 0

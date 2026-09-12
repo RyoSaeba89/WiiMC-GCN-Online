@@ -51,6 +51,7 @@ extern "C" {
 #include "libwiigui/gui.h"
 #include "utils/http.h"
 #include "utils/gettext.h"
+#include "utils/debuglog.h"
 
 #define PARSESTACK (32*1024)
 #define DEVICESTACK (32*1024)
@@ -886,25 +887,43 @@ void FindAppPath()
 	int devnum = 0;
 	bool success = false;
 
+	// A mark before each attempt, not only after: a probe that hangs or
+	// faults has to be named by the last line on screen.
 #ifdef HW_RVL
 	if (fatMountSimple("sd1", &__io_wiisd)==true) {
+		success = true;
+	}
 #else
+	DebugMark("sd: trying GC Loader");
 	if (fatMountSimple("sd1", &__io_gcode)==true) {
+		success = true;
+		DebugMark("sd: sd1: mounted via GC Loader");
+	}
+	if(!success) {
+		DebugMark("sd: trying SD2SP2");
+		if(fatMountSimple("sd1", &__io_gcsd2)==true) {
+			success = true;
+			DebugMark("sd: sd1: mounted via SD2SP2");
+		}
+	}
+	if(!success) {
+		DebugMark("sd: trying SD Gecko in slot B");
+		if(fatMountSimple("sd1", &__io_gcsdb)==true) {
+			success = true;
+			DebugMark("sd: sd1: mounted via SD Gecko in slot B");
+		}
+	}
+	if(!success) {
+		DebugMark("sd: trying SD Gecko in slot A");
+		if(fatMountSimple("sd1", &__io_gcsda)==true) {
+			success = true;
+			DebugMark("sd: sd1: mounted via SD Gecko in slot A");
+		}
+	}
 #endif
-		success = true;
-	}
-#ifdef HW_DOL
-	else if(fatMountSimple("sd1", &__io_gcsd2)==true) {
-		success = true;
-	}
-	else if(fatMountSimple("sd1", &__io_gcsdb)==true) {
-		success = true;
-	}
-	else if(fatMountSimple("sd1", &__io_gcsda)==true) {
-		success = true;
-	}
-#endif
-	
+	if(!success)
+		DebugMark("sd: NOTHING mounted -- no log file can be written this run");
+
 	if(success) {
 		isInserted[DEVICE_SD] = true;
 		

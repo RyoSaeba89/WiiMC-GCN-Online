@@ -34,6 +34,7 @@
 #include "filebrowser.h"
 #include "utils/gettext.h"
 #include "utils/http.h"
+#include "utils/debuglog.h"
 //#include "utils/playlog.h"
 #include "filelist.h"
 
@@ -5039,8 +5040,8 @@ static void MenuSettingsGlobal()
 				case LANG_ENGLISH:				sprintf(options.value[0], "English"); break;
 				//only support languages that can have all text translated
 				//case LANG_GERMAN:				sprintf(options.value[0], "Deutsch"); break;
-				//case LANG_FRENCH:				sprintf(options.value[0], "Français"); break;
-				case LANG_SPANISH:				sprintf(options.value[0], "Español"); break;
+				//case LANG_FRENCH:				sprintf(options.value[0], "Franï¿½ais"); break;
+				case LANG_SPANISH:				sprintf(options.value[0], "Espaï¿½ol"); break;
 				/*case LANG_ITALIAN:				sprintf(options.value[0], "Italiano"); break;
 				case LANG_DUTCH:				sprintf(options.value[0], "Dutch"); break;
 				case LANG_SIMP_CHINESE:			sprintf(options.value[0], "Chinese (Simplified)"); break;
@@ -8618,6 +8619,7 @@ void WiiMenu()
 	// Init MPlayer path and vars (only happens once)
 	if(!InitMPlayer())
 	{
+		DebugMark("menu: InitMPlayer failed, the program will now exit");
 		ExitRequested = true;
 		return;
 	}
@@ -8651,6 +8653,7 @@ void WiiMenu()
 
 	while(!guiShutdown)
 	{
+		DebugMark("menu: %d", menuCurrent);
 		switch (menuCurrent)
 		{
 			case MENU_BROWSE_VIDEOS:

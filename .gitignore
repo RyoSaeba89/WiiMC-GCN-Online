@@ -1,6 +1,11 @@
 # Final products
 /wiimc.elf
 /wiimc.dol
+
+# Filled by `make -f Makefile.gc` when the SD card is plugged in: every ELF
+# that went onto the card, and every log that came back from it
+/deployed/
+/logs/
 *.elf.map
 
 # The build/ directory is not ignored wholesale: build/wiimc.ld and
