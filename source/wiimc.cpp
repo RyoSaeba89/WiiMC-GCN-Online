@@ -841,12 +841,38 @@ void LoadMPlayerFile()
 	while(WiiSettings.subtitleVisibility && !ParseDone())
 		usleep(100);
 	
-	// set new file to load
 	DebugMark("play: %s", loadedFile);
+
+	// 3 means "handed over, not taken yet", and it is the fix for the
+	// "Loading..." that never went away (PORTING.md 11.12).
+	//
+	// This loop used to wait for controlledbygui to become 0. MPlayer sets 0 the
+	// moment it picks the filename up (play_next_file), and then sets it back to
+	// 1 as soon as it finds the file has no video -- so for an MP3 the 0 exists
+	// only for the length of the demuxer and codec init. Miss that window and
+	// this loop waits for a value that will never come round again: the music
+	// plays, the browser never comes back. The first file after boot always
+	// worked because MPlayer was already sitting at 0.
+	//
+	// Nothing in mplayer.c tests for 3 -- every test there is == 0, == 1 or
+	// == 2 -- and MPlayer is parked in play_next_file when we set it, so the
+	// only thing that can clear it is MPlayer taking the file.
+	controlledbygui = 3;
 	wiiLoadFile(loadedFile, partitionlabel);
 
-	while(controlledbygui != 0)
-		usleep(100);
+	{
+		u64 waitStart = gettime();
+		bool said = false;
+		while(controlledbygui == 3)
+		{
+			usleep(100);
+			if(!said && diff_sec(waitStart, gettime()) >= 2)
+			{
+				said = true;
+				DebugMark("stuck: LoadMPlayerFile handed the file over, mplayer has not taken it");
+			}
+		}
+	}
 }
 
 void ResumeMPlayerFile()
@@ -1221,9 +1247,11 @@ int main(int argc, char *argv[])
 	SYS_SetResetCallback(ResetCB);
 	
 #ifdef WANT_DEBUGLOG
-	// No countdown: the register dump stays up until Z or RESET, long enough
-	// to photograph. The same report is on the card either way.
-	__exception_setreload(0);
+	// -1, not 0: libogc2 stores t*50, and its wait loop reloads as soon as the
+	// counter reads exactly 0 -- so 0 is the one value that means "reload now".
+	// That is what ate the dump of the fourth and fifth hardware runs (11.7).
+	// -1 is the library's own default: hold the dump until Z or RESET.
+	__exception_setreload(-1);
 #else
 	__exception_setreload(8);
 #endif

@@ -118,6 +118,16 @@ static void * devicecallback (void *arg)
 
 	while (1)
 	{
+		// Wii only, on purpose. On the GameCube the mounted card is the one the
+		// program was booted from and the one the log is written to; there is no
+		// hot-swap story, and polling isInserted() every two seconds means EXI
+		// traffic on a memory card slot every two seconds -- which is exactly
+		// what the log design refuses to do (PORTING.md 11.2). It was also
+		// actively harmful: `sd` pointed at the GC Loader whatever had really
+		// mounted, so on any other adapter this declared the card removed two
+		// seconds after boot and cleared isInserted[DEVICE_SD] -- which is what
+		// left the file browser with nothing to list (PORTING.md 11.10).
+#ifdef HW_RVL
 		if(isInserted[DEVICE_SD])
 		{
 			if(!sd->isInserted(sd)) // device was removed
@@ -141,7 +151,6 @@ static void * devicecallback (void *arg)
 			isInserted[DEVICE_SD] = true;
 			devicesChanged = true;
 		}
-#ifdef HW_RVL
 		if(isInserted[DEVICE_USB])
 		{
 			if(!usb->isInserted(usb)) // device was removed
@@ -884,7 +893,6 @@ void FindAppPath()
 {
 	char filepath[MAXPATHLEN];
 	DIR *dir;
-	int devnum = 0;
 	bool success = false;
 
 	// A mark before each attempt, not only after: a probe that hangs or
@@ -896,12 +904,14 @@ void FindAppPath()
 #else
 	DebugMark("sd: trying GC Loader");
 	if (fatMountSimple("sd1", &__io_gcode)==true) {
+		sd = &__io_gcode;
 		success = true;
 		DebugMark("sd: sd1: mounted via GC Loader");
 	}
 	if(!success) {
 		DebugMark("sd: trying SD2SP2");
 		if(fatMountSimple("sd1", &__io_gcsd2)==true) {
+			sd = &__io_gcsd2;
 			success = true;
 			DebugMark("sd: sd1: mounted via SD2SP2");
 		}
@@ -909,6 +919,7 @@ void FindAppPath()
 	if(!success) {
 		DebugMark("sd: trying SD Gecko in slot B");
 		if(fatMountSimple("sd1", &__io_gcsdb)==true) {
+			sd = &__io_gcsdb;
 			success = true;
 			DebugMark("sd: sd1: mounted via SD Gecko in slot B");
 		}
@@ -916,6 +927,7 @@ void FindAppPath()
 	if(!success) {
 		DebugMark("sd: trying SD Gecko in slot A");
 		if(fatMountSimple("sd1", &__io_gcsda)==true) {
+			sd = &__io_gcsda;
 			success = true;
 			DebugMark("sd: sd1: mounted via SD Gecko in slot A");
 		}
@@ -926,8 +938,18 @@ void FindAppPath()
 
 	if(success) {
 		isInserted[DEVICE_SD] = true;
-		
-		AddPartition(0, DEVICE_SD, T_FAT, &devnum);
+
+		// Not AddPartition(): sd1: is already mounted, by whichever of the four
+		// interfaces above actually answered. AddPartition would fatMount it a
+		// second time through `sd`, which was hardcoded to the GC Loader, so on
+		// any other adapter that call failed and returned BEFORE setting
+		// part[].type. BrowserChangeFolder() lists a device only when type > 0,
+		// which is why the file browser came up empty (PORTING.md 11.10).
+		strcpy(part[DEVICE_SD][0].mount, "sd1");
+		sprintf(part[DEVICE_SD][0].name, "GCN");
+		part[DEVICE_SD][0].interface = sd;
+		part[DEVICE_SD][0].sector = 0;
+		part[DEVICE_SD][0].type = T_FAT;
 		
 		sprintf(filepath, "sd1:/apps/%s", APPFOLDER);
 		dir = opendir(filepath);
@@ -1794,8 +1816,13 @@ static bool ParseDirEntries()
 			filestat.st_mode = S_IFREG;
 
 		#endif
-#if 0
-		// skip this file if it's not an allowed extension 
+		// Skip anything whose extension this browser does not play. This whole
+		// block was #if 0 out, which is why a folder of MP3s also listed every
+		// AlbumArt*.jpg, Folder.jpg and Thumbs.db that Windows had left there
+		// with the hidden attribute -- invisible on a PC, listed here -- and why
+		// IsPlaylistExt(ext) below was reading an uninitialised buffer
+		// (PORTING.md 11.11). Directories are never filtered.
+		ext[0] = 0;
 		if(!S_ISDIR(filestat.st_mode))
 		{
 			GetExt(entry->d_name, ext);
@@ -1803,21 +1830,19 @@ static bool ParseDirEntries()
 			if(menuCurrent == MENU_BROWSE_VIDEOS && IsSubtitleExt(ext))
 			{
 				BROWSERENTRY *s_entry = AddEntrySubs();
-				if(s_entry)
-					s_entry->file = strdup(entry->d_name);
-				if(!s_entry->file) // no mem
+				if(!s_entry || !(s_entry->file = strdup(entry->d_name))) // no mem
 				{
-					DeleteEntrySubs(s_entry);						
+					if(s_entry)
+						DeleteEntrySubs(s_entry);
 					InfoPrompt("Warning", "This directory contains more entries than the maximum allowed. Not all entries will be visible.");
 					entry = NULL;
-					break;						
-				}	
+					break;
+				}
 			}
 
-			if(!IsAllowedExt(ext) && (!IsPlaylistExt(ext)))
+			if(!IsAllowedExt(ext) && !IsPlaylistExt(ext))
 				continue;
 		}
-#endif
 		// add the entry
 		BROWSERENTRY *f_entry = AddEntryFiles();
 		if(f_entry)
@@ -1828,7 +1853,9 @@ static bool ParseDirEntries()
 				DeleteEntryFiles(f_entry);
 				goto nomemParseDirEntries;
 			}
-			f_entry->length = filestat.st_size;
+			// st_size is never filled in -- readdir gives d_type, not a stat -- and
+			// nothing reads this field. Zero beats a stack leftover.
+			f_entry->length = 0;
 
 #if 0
 			/* Video mode thumbnails */
@@ -2023,7 +2050,19 @@ ParseDirectory(bool waitParse)
 	if(waitParse) // wait for complete parsing
 	{
 		ShowAction("Loading...");
-		while(!LWP_ThreadIsSuspended(parsethread)) usleep(THREAD_SLEEP);
+		{ // watchdog, see LoadMPlayerFile()
+			u64 waitStart = gettime();
+			bool said = false;
+			while(!LWP_ThreadIsSuspended(parsethread))
+			{
+				usleep(THREAD_SLEEP);
+				if(!said && diff_sec(waitStart, gettime()) >= 2)
+				{
+					said = true;
+					DebugMark("stuck: ParseDirectory waiting for the parse thread");
+				}
+			}
+		}
 		CancelAction();
 	}
 

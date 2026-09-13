@@ -254,6 +254,38 @@ netif with two letters, the chip (`en` DOL-015, `E` ENC28J60, `W` W5500,
 "no network" and "found the wrong adapter" look identical from the couch — and
 this fork is explicitly meant to be tested on both.
 
+### 5.4 What the pad does in the menus
+
+Asked on 2026-09-13, because most buttons appear dead. They are: the menus bind
+six things and nothing else.
+
+| Button | In a menu |
+|---|---|
+| D-pad / stick | move the selection |
+| A | select, open a folder, play a file |
+| B | up one level (`upOneLevelBtn`) |
+| Y | add to playlist (`trigPlus`, `menu.cpp`) |
+| X | nothing — `playlistResetBtn.SetTrigger(NULL)`, deliberately disabled |
+| Z | the credits screen, which also prints free memory (§11.9) |
+| START | quit to the loader |
+
+**The README's control list is for playback, not for menus** — hold X and
+left/right to seek, L to the start, R to end playback, up/down to pause. None
+of it does anything on the browser screens, which is what makes the pad feel
+broken there.
+
+Where the music comes from: the browser opens `WiiSettings.musicFolder`, and
+there is no setting for it — `"Music Folder"` is commented out of
+`MenuSettingsMusic()`, as `"Videos Folder"` is out of `MenuSettingsVideos()`. So
+it is always empty, and an empty folder means the browser opens on the device
+list instead: *SD* first, then the card with A, back up with B. Files go
+anywhere on the card. (That list was empty until §11.10.)
+
+There is no way to reach a network stream from this build: the transport is
+still off (§2.1), web radio and WebDAV are phases 2 and 4 of §8, and
+`MENU_BROWSE_ONLINEMEDIA` — the screen that would host them — is commented out
+of the menu dispatcher in four places (`source/menu.cpp`).
+
 ---
 
 ## 6. Design
@@ -585,7 +617,7 @@ they are not repeated here beyond the one-line reasons in the source.
 
 | Silent death | Instrument |
 |---|---|
-| CPU exception | `-Wl,--wrap=c_default_exceptionhandler`: a report written without printf into RAM, then to the card, then libogc's dump. The reload countdown is off, so the dump stays until Z or RESET |
+| CPU exception | `-Wl,--wrap=c_default_exceptionhandler`: a report written without printf into RAM, then to the card, then libogc's dump. `__exception_setreload(-1)` holds that dump until Z or RESET -- not `0`, which reloads at once (§11.7) |
 | `exit`, `abort`, `assert` | wrapped at link time; the caller's address is logged and flushed before the real call |
 | hang | a heartbeat thread at priority 100 every 2 s, and a dump of every thread's state and parked stack every 10 s |
 | stack overflow | `LWP_CreateThread` wrapped: every stack is painted, its high-water mark reported, an overflow marked |
@@ -614,6 +646,8 @@ anywhere but the console.
 |---|---|
 | `sd1:/wiimc.log` | this run |
 | `sd1:/wiimc-prev.log` | the run before — **the one to read after a crash and a reboot** |
+| `sd1:/wiimc-crash.txt` | the crash report of this run, if there was one — 24 KB, created and held open at boot |
+| `sd1:/wiimc-crash-prev.txt` | the crash report of the run before |
 
 At the root of the card that was mounted as `sd1:`, whatever the slot. If the
 log says `sd: NOTHING mounted`, or neither file exists, the card was never
@@ -622,7 +656,9 @@ mounted and nothing after that point could be written.
 The file is created at 256 KB at boot and overwritten in place, so it is mostly
 blank lines in an editor. The body wraps under the boot header when full; the
 newest line is just above `<<<<<<<< end of log >>>>>>>>`. The last 24 KB are
-reserved, and a crash report, if any, is **at the very end of the file**.
+reserved, and a crash report, if any, is **at the very end of the file** as
+well as in `wiimc-crash.txt`. A crash file that is 24 KB of blank lines and
+nothing else is what "no report at all" looks like: the handler never ran.
 
 ### 11.4 Reading it
 
@@ -670,9 +706,15 @@ wrong answers without any warning.
 Every `make -f Makefile.gc` ends with a `deploy` step, which on this machine
 does three things when the SD card is plugged in as `F:`:
 
-1. **Fetches the logs first.** `wiimc.log` and `wiimc-prev.log` are copied
-   into `logs/`, named by their modification time, before anything on the card
-   changes. A log already fetched is not copied twice.
+1. **Fetches the logs, then clears them off the card.** All four files of
+   §11.3 are copied into `logs/`, named by their modification time, before
+   anything on the card changes — and removed from the card once the copy is
+   safe. The card therefore holds exactly what the last run wrote, and never an
+   older run's file that could be read as this one's. The console has no clock
+   battery, so those names carry its date, not ours; two runs of similar length
+   land on the same name, so a file whose name is taken and whose contents
+   differ is kept as `-2`, `-3`, and so on. Nothing is deleted that is not
+   already in `logs/`.
 2. **Writes `wiimc.dol`** to the root of the card and checks it back by MD5.
 3. **Archives the ELF** as `deployed/wiimc-<build id>.elf`, keeping the last
    eight. The same build id is in the `build` line at the top of the log, so
@@ -759,3 +801,490 @@ goes first to `sd1:/wiimc-crash.txt`, created at boot and **held open** by
 descriptor, so the crash path needs only `lseek`/`write`/`fsync`. A report
 from the previous run is kept as `wiimc-crash-prev.txt`; `deploy` fetches all
 four files.
+
+### 11.7 The fifth hardware run (2026-09-13)
+
+Build `20260912-223308`, the one the instruments of §11.6 were added for.
+`logs/20840921-101648-wiimc.log`, with `logs/20840921-101616-wiimc-crash.txt`
+beside it.
+
+The run reached the menu and stayed there: `sd1:` mounted through the SD Gecko
+in slot B at 0.308 s, app path at 0.526 s, the menu up at 0.685 s with ten
+threads. Then thirty-two seconds of browsing — `menu: 1`, `menu: 0` at
+31.216 s, `menu: 1` again at 32.256 s — with memory flat across all fifteen
+heartbeats: `mem free 12871K`, `low` equal to it, `oom 0`, not one byte of
+drift. Then `menu: 3` (`MENU_SETTINGS`) at 32.696 s, and the log stops. `hb 16`
+was due at 32.75 s. **The machine died less than 60 ms after entering
+Settings**, against 300 ms in the fourth run, which died on the same
+breadcrumb.
+
+Two instruments were added for this run. One stayed silent, and the answer
+turned out to be in what the screen did.
+
+**The crash file was never written.** `sd1:/wiimc-crash.txt`, created and held
+open by descriptor at boot precisely so that a crash would need no `malloc`,
+came back 24 KB of padding — every byte `0x0a`. The fourth run's guess is
+therefore wrong: the report did not die inside `fopen`'s allocation, because it
+never got as far as opening anything.
+
+**The dump did come up.** Asked what the screen shows, the user saw it: numbers
+on black for a fraction of a second, then the GameCube boot animation. So an
+exception *is* taken, libogc *does* print its register dump — and the console
+is then reset out from under it before anyone can read it.
+
+**What resets it is our own instrument.** `main()` calls
+`__exception_setreload(0)` (`source/wiimc.cpp`), added in §11.6 to hold the
+dump on screen. It does the opposite. In the linked ELF:
+
+- `__exception_setreload(t)` is three instructions: `reload_timer = t * 50`,
+  a count of 20 ms ticks.
+- `c_default_exceptionhandler`, after printing, loops on the pads. It prints
+  the countdown only while `reload_timer > 0`, and it *keeps looping* only
+  while `reload_timer != 0`. Z or RESET break out. Reaching the bottom with
+  the counter at exactly zero falls straight into `__reload()`.
+- `reload_timer` lives in `.sdata` and its initial value is `ffffffff`. **The
+  library's own default is -1: wait forever.**
+
+So `0` is the single value that means *reload now*, `-1` is the one that means
+*never*, and the call written to keep the dump up is the one that throws it
+away on the first pass of the loop.
+
+`__reload()` then looks for the `STUBHAXX` magic at `0x80001800` and jumps to
+the loader stub if it finds one. Swiss leaves none, so it falls through to
+`__SYS_DoHotReset()` — which is the boot animation the user sees, and the
+reason this looked like a machine reset rather than a crash.
+
+It also explains the one run that *was* photographed. The third run's DABR
+fault happened inside `DebugLogInit()`, called at `source/wiimc.cpp:1203`,
+**before** the `__exception_setreload(0)` at 1226: the counter was still the
+library's -1, so that dump stayed up. Every hardware run since has crashed
+after line 1226. All five deployed builds carry `li r3,0` at that call site.
+
+Fixed by passing `-1`. The next run's dump stays until Z or RESET.
+
+**And the empty crash file, with that in hand.** The wrapper did run — in the
+linked ELF the only two branches to `c_default_exceptionhandler` are both
+inside `__wrap_c_default_exceptionhandler`, and nothing else reaches it. So
+the report was formatted into RAM and the card write was attempted, and the
+file still came back as padding. What is left is the write itself: either it
+returned an error, or it faulted, in which case the second-exception path
+calls the real handler with the *first* context — which would produce exactly
+the dump that appears. The card write is the one step that runs with
+interrupts back on, inside libfat and EXI, from an exception context. The
+next photo settles it: a `*** second exception` line cannot reach the card,
+but the dump names the fault that did.
+
+Two other things this run settles:
+
+- **The `DEADBABE` false positive is gone.** Thread #1, the heartbeat, reports
+  2836 and then 2892 bytes of its 16384 used, and no `STACK OVERFLOW`. The
+  §11.6 fix is confirmed on hardware.
+- **Entering Settings creates no thread.** Each menu change starts a thread at
+  `80014b18` = `ThumbThread` (`source/menu.cpp:2851`) with a heap stack — #10
+  at `menu: 1`, #11 at `menu: 0`, #12 at `menu: 1` — and `MenuBrowse` joins it
+  on the way out (`menu.cpp:4570`). `menu: 3` starts none, so thread creation
+  is not on the path to the crash.
+
+**Marks inside `MenuSettings()`.** It runs a hundred lines
+(`source/menu.cpp:7129`) between the `menu: 3` breadcrumb and its idle loop,
+and not one of them was marked. Four now are: on entry, around the
+`GuiOptionBrowser` constructor, after the `SuspendGui`/`Append`/`ResumeGui`
+handover, and on the first pass of the loop. They split those 60 ms, and the
+last one splits the menu thread from the GUI thread drawing what it has just
+been handed. Each reaches the card by itself, so the last one written names
+the statement — even if the crash report is lost again.
+
+Two leads that the same run closes, so they are not chased twice:
+
+- **Not the artwork.** The option browser's eight PNGs — `bg_entry`,
+  `bg_entry_over`, the three `scrollbar` pieces, the `arrow` pairs — are all
+  decoded by `GuiFileBrowser` too, and the browse menus ran for half a minute.
+- **Not an array overrun.** This screen asks for eight rows where every other
+  settings screen asks for six or seven, but `PAGESIZE` is 11
+  (`source/libwiigui/gui.h:73`), so `optionTxt[]` and its siblings hold them.
+
+What *is* new at `menu: 3` is the `GuiOptionBrowser` class itself: `MenuBrowse`
+does not build one, so this is the first in the run.
+
+### 11.8 The sixth hardware run (2026-09-13): the crash, named
+
+Build `20260913-205459`, the first with `__exception_setreload(-1)`. The dump
+stayed on screen and was photographed (`PXL_20260913_190746352.jpg`):
+
+```
+Exception (DSI) occurred!
+GPR01 8059E9A8   GPR08 8059F200
+LR 8027CEE8   SRR0 802B1320   SRR1 00009032   MSR 00001000
+DAR 8059F200   DSISR 02400000
+STACK DUMP: 802b1320 -> 8027cee8 -> 8020ec9c -> 80031734 -> 80031cdc
+            -> 80032680 -> 8002ce84 -> 8002f3c4 -> 800138d0
+CODE DUMP 802b1320: 91480000 38E80010 91480004 91480008
+```
+
+Resolved against `deployed/wiimc-20260913-205459.elf`:
+
+| Address | Frame |
+|---|---|
+| `802b1320` | `memset` — the `stw r10,0(r8)` of its four-word loop |
+| `8027cee8` | `cf2_arrstack_init`, freetype-2.14.3 `src/psaux/psarrst.c:66` |
+| `8020ec9c` | `FT_Load_Glyph`, `src/base/ftobjs.c:1077` |
+| `80031734` | `FreeTypeGX::cacheGlyphData()`, `source/utils/FreeTypeGX.cpp:337` |
+| `80031cdc` | `FreeTypeGX::getWidth()`, `FreeTypeGX.cpp:597` |
+| `80032680` | `FreeTypeGX::getStyleOffsetWidth()`, `FreeTypeGX.cpp:435` |
+| `8002ce84` | `GuiText::Draw()`, `source/libwiigui/gui_text.cpp:547` |
+| `8002f3c4` | `GuiWindow::Draw()`, `source/libwiigui/gui_window.cpp:140` |
+| `800138d0` | `GuiThread()`, `source/menu.cpp:1214` |
+
+**It is a stack overflow of the GUI thread**, and three numbers say so with no
+inference required:
+
+- `DSISR 02400000` is a store **and a DABR match** — libogc2's stack guard
+  (§11.6), not a wild pointer.
+- `DAR 8059F200`, and in the ELF `guistack` is at **exactly `8059f200`**,
+  `0x4000` long. The faulting store lands on the guard word at the very bottom
+  of the GUI thread's stack.
+- `GPR01`, the stack pointer, is `8059E9A8` — **2136 bytes below `guistack`**,
+  already off the end and inside `progressstack`, which ends where `guistack`
+  begins.
+
+So the thread had spent its whole 16 KB and 2 KB more *before*
+`cf2_arrstack_init` got to memset its own local.
+
+**The card agrees.** The same run's log, `logs/20840921-101738-wiimc.log`,
+names thread #3 as `GuiThread` with `stack 8059f200 size 16384` — the address
+in `DAR`, confirmed from the console rather than from the ELF. Its last four
+lines are the §11.7 marks: `settings: entered`, `building the option browser`,
+`option browser built`, `appended, the GUI is running again` — and then
+nothing. The fourth is the last statement of `MenuSettings()` before its idle
+loop, so the menu thread finished handing its elements over and the GUI thread
+died on the first frame it drew them in. `settings: first pass of the idle
+loop` never printed.
+
+**Why FreeType, and why it is not a port bug.** `source/fonts/font.ttf` begins
+with `OTTO`: it is OpenType with **CFF** outlines, so every glyph not yet in
+the cache is rendered by FreeType's Adobe CFF interpreter (`psaux/cf2_*`),
+which is far hungrier with the stack than the TrueType path. The 16 KB stacks
+are upstream's, sized against a much older FreeType; this tree builds against
+the current devkitPro (§7, commit `45a2104`), which is freetype 2.14.3. Old
+code, new library.
+
+**Which text.** The chain runs straight from `GuiWindow::Draw()` to
+`GuiText::Draw()` with no browser frame between, and it ends at the thread
+entry, so it is complete: the element being measured is one of `mainWindow`'s
+own children. In `MenuSettings()` that is `titleTxt` — the word *Settings*.
+
+**So it was never a Settings bug.** Any screen drawing an uncached glyph was
+one glyph away from this. Settings is where it happened to land.
+
+**The fix.** `GSTACK` and `GUITH_STACK` go from 16 KB to 64 KB
+(`source/menu.cpp`). All four threads they cover draw — `GuiThread`,
+`ProgressThread`, `ScreensaverThread` (`menu.cpp:500`) and `CreditsThread` —
+so all four get it. That is 192 KB more `.bss` against the ~12.8 MB the run
+reports free (§9). The painted-stack high-water mark in the heartbeat will
+report what is really used, so the number can be tightened from a measurement
+instead of a guess.
+
+Two notes for later:
+
+- **The guard is a good instrument.** The same DABR that produced the *false*
+  `STACK OVERFLOW` of run 4 is what caught this one exactly, at the first byte
+  past the end. The fault was the log's scan reading it, never the guard.
+- **The crash file still comes back empty.** `wiimc-crash.txt` from this run is
+  24 KB of padding again, and the log's own reserved tail is untouched too, so
+  both writes on the exception path failed. The report is built in RAM before
+  either, and the screen proves that much ran. What fails is the write itself,
+  from an exception context, through libfat and EXI. Unresolved, and no longer
+  urgent now that the dump stays up.
+
+### 11.9 The seventh run: Settings fixed, and Z is a different bug
+
+Build `20260913-211322`, log `logs/20840921-102014-wiimc.log`.
+
+**The stack fix holds.** Settings opens. The §11.7 marks run all the way
+through — `settings: first pass of the idle loop` at 42.999 s — and the menu
+was entered and left twice more after that. The heartbeat then gives the number
+the 64 KB was a guess about:
+
+```
+thr #3  entry 800137d8 prio  60 ... stack 19624/65536
+```
+
+The GUI thread really wants **19624 bytes**. The 16384 it used to have was
+3240 short — which is why it died on the first uncached glyph it met with a
+deep enough frame, and why nothing before Settings had tripped it. At 64 KB it
+sits at 30% used, so the size can stay as it is.
+
+**Z in a browse menu is a separate, older bug.** Z is bound in `GuiThread`
+(`source/menu.cpp`) to `ResumeCreditsThread()` while `menuCurrent < 2`, that is
+on the Videos and Music browsers; the README documents it as a feature — *press
+Z to view the credits screen, it will also display the available memory*.
+`CreditsWindow()` opened with:
+
+```c
+int numEntries = 15;
+GuiText *txt[numEntries];
+```
+
+and then filled **fourteen** of them. Four further entries exist in the
+function but sit under `#if 0`. Both loops at the end run to `numEntries`:
+
+```c
+for(i=0; i < numEntries; i++) alignWindow.Append(txt[i]);
+...
+for(i=0; i < numEntries; i++) delete txt[i];
+```
+
+So `txt[14]` was an uninitialised stack word: appended into the window,
+dereferenced by the GUI thread on the next frame it drew, and finally handed to
+`delete`. Undefined behaviour that survived on the build this fork came from —
+the slot only has to happen to hold something harmless — and does not survive
+here.
+
+Fixed by sizing the array for every entry in the source (18) and counting the
+ones actually built, so re-enabling the `#if 0` block cannot bring it back.
+
+No register dump for this one. The log stops at `menu: 1` and `hb 23` with
+nothing after, and `wiimc-crash.txt` is 24 KB of padding for the third run in a
+row (§11.8). The card said where it happened; the source said what it was.
+
+### 11.10 Why the file browser was empty
+
+Reported on 2026-09-13: nothing opens under Music. It is not a drawing problem
+and it is not the card's format — the browser had nothing to list.
+
+`BrowserChangeFolder()` (`source/filebrowser.cpp`) builds the top-level
+listing, the one that offers the devices, only when **both** hold:
+
+- `isInserted[DEVICE_SD]` is true, and
+- some `part[DEVICE_SD][i].type > 0`.
+
+Neither did, and for the same reason. `source/fileop.cpp` declared, for the
+GameCube:
+
+```c
+static DISC_INTERFACE* sd = &__io_gcode;
+```
+
+one hardcoded interface — the GC Loader — while `FindAppPath()` probes four in
+turn (GC Loader, SD2SP2, SD Gecko slot B, slot A) and mounts through whichever
+answers. Here that is the SD Gecko in slot B. So:
+
+1. `AddPartition(0, DEVICE_SD, T_FAT, &devnum)` called
+   `fatMount("sd1", sd, ...)` through the wrong interface, on top of an `sd1:`
+   that `fatMountSimple()` had already mounted. It failed and returned
+   **before** `part[].type = type`. The partition table stayed empty.
+2. `devicecallback()`, the device thread, polls `sd->isInserted(sd)` every two
+   seconds. On a console with no GC Loader that is false, so 200 ms after boot
+   it took the card as *removed*: `UnmountPartitions(DEVICE_SD)`,
+   `sd->shutdown(sd)`, `isInserted[DEVICE_SD] = false`.
+
+What saved the run is that `UnmountPartitions()` switches on
+`part[][].type`, which the first bug had left at 0 — so it unmounted nothing.
+`sd1:` kept working, the log kept being written, the settings kept saving, and
+only the browser was blind. Two bugs whose symptoms cancelled into one silent
+one.
+
+**Fixes.** `sd` is assigned the interface that actually mounted, in each of the
+four probe branches. `FindAppPath()` fills `part[DEVICE_SD][0]` itself rather
+than calling `AddPartition()`, which could only try to mount an
+already-mounted `sd1:` a second time. And the insert/remove polling is now
+`#ifdef HW_RVL`: on the GameCube the mounted card is the one the program booted
+from and the one the log is written to, there is no hot-swap story, and polling
+a memory card slot every two seconds is exactly the EXI traffic §11.2 refuses
+to generate.
+
+That also closes the loose end of §11.6 — *the device thread polls
+`__gcode_IsInserted` every two seconds on a console that has none*. It was not
+harmless, it was half of this.
+
+**So adding music is: put the files on the card.** Anywhere on it. Music opens
+on the device list, A enters the card, B goes back up. There is no folder to
+configure and no setting to find (§5.4).
+
+The eighth run, build `20260913-212428`, also confirms §11.9 in passing: 102
+seconds, menus 0, 1, 3, 4, 5 and 6 visited repeatedly, `EXIT: exit(0)` from
+START at the end, and no crash. The credits array and the GUI stack are both
+settled.
+
+### 11.11 A folder of MP3s, and what it showed
+
+Reported on 2026-09-13, after §11.10 made the browser work: a folder of MP3s
+also listed a pile of `AlbumArt…` entries *that are not on the card*, and
+playing a track left a "Loading..." window up forever with the music audible
+behind it.
+
+**The AlbumArt entries are on the card.** They are Windows Media Player's
+artwork — `AlbumArtSmall.jpg`, `AlbumArt_{GUID}_Large.jpg`, `Folder.jpg`,
+`Thumbs.db` — and every one of them carries the FAT **hidden + system**
+attributes, which is why Windows Explorer does not show them and the browser
+does. `ParseDirEntries()` skips only names starting with `.` or `$`, and with
+`hideExtensions` on the label loses its `.jpg`, so they read as folders.
+
+The reason they are listed at all is that the whole extension filter in
+`ParseDirEntries()` was inside `#if 0`:
+
+```c
+if(!IsAllowedExt(ext) && (!IsPlaylistExt(ext)))
+    continue;
+```
+
+With it disabled, `GetExt()` was never called either — so the `IsPlaylistExt(ext)`
+a few lines below read an **uninitialised** buffer, and whether a file was
+flagged `TYPE_PLAYLIST` depended on stack leftovers. The block is restored
+(with the `AddEntrySubs()` NULL dereference in it fixed), and
+`f_entry->length`, which was assigned a `st_size` that nothing ever filled,
+is now 0 — nothing reads it.
+
+**The "Loading..." hang is not what it looked like.** Two guesses died on the
+evidence in `logs/20840921-105340-wiimc.log`, both worth recording so they are
+not tried again:
+
+- *Not the embedded cover art.* Both MP3s carry an ID3 `APIC` frame, and
+  FFmpeg exposes those as a video stream, which would have kept
+  `mplayer.c`'s `if(!mpctx->sh_video)` from handing control back. But MPlayer's
+  own output in the log says `Audio only file format detected.` and `No video -
+  returning control to GUI` for the file that hung.
+- *Not the file.* The first track played, from another folder, ran for 81
+  seconds with the browser fully usable — and it has an `APIC` too.
+
+What the run does show is the deadlock itself. At `hb 51`, with the music
+playing:
+
+| Thread | Where |
+|---|---|
+| #4 `ProgressThread` | `menu.cpp:2037`, inside `ProgressWindow`'s draw loop, **state 0 — not suspended** |
+| #0 main | `CancelAction()` at `menu.cpp:2116` and `LoadMPlayerFile()` at `wiimc.cpp:848` on the stack |
+
+`CancelAction()` sets `showProgress = 0` and `progressThreadHalt = 1` and then
+waits for the progress thread to suspend; `ProgressWindow()` leaves its loop
+only while both of those hold. So either something re-armed them after the
+store, or the main thread is really in the *other* wait —
+`while(controlledbygui != 0)` — and the progress window is simply still up
+because nobody has cancelled it yet. The heartbeat's per-thread list is a
+**stack scan, not an unwind** (§11.4), so it cannot separate the two: both
+addresses can sit on the same stack, one of them stale.
+
+**So this one gets an instrument instead of a fix.** The four waits that can
+never end — `LoadMPlayerFile` (`controlledbygui == 0`), `LoadNewFile`
+(`controlledbygui == 1`), `CancelAction` (progress thread suspends) and
+`ParseDirectory` (parse thread suspends) — each write one `stuck:` line after
+two seconds, naming the loop and the values it is watching, and then keep
+waiting. The next run that hangs says which of the four it is in the log,
+without a photograph and without guessing.
+
+Also measured in that run, worth carrying into §9: **MPlayer's thread peaked at
+511560 bytes of its 524288-byte stack** while playing an MP3. That is 12 KB of
+headroom on a stack that has never been examined. It did not fail, but it is
+the next stack to widen if anything odd appears during playback.
+
+### 11.12 The "Loading..." that never went away
+
+The §11.11 watchdogs answered on the first run that hung
+(`logs/20840921-111348-wiimc.log`):
+
+```
+[    5.046] play: sd1:/music/2080 - The backup/…My Megadrive….mp3
+[    9.757] play: sd1:/music/F-Zero X - OST/…01 - Endless Challenge.mp3
+[   11.763] stuck: LoadMPlayerFile wants controlledbygui==0, it is 1
+```
+
+**It was never about the folder.** The first file played, the second one hung —
+at 5.0 s and 9.8 s here, at 7 s and 88 s in the run before. Any second file
+does it.
+
+`controlledbygui` is the whole handshake between the menu and MPlayer, and it
+carries three meanings on one `int`: 2 = *stop what you are playing*, 0 =
+*MPlayer has the file*, 1 = *control is back with the GUI*. `LoadMPlayerFile()`
+drove it like this:
+
+```c
+controlledbygui = 2;              // stop the previous file
+while(controlledbygui == 2) …     // wait for MPlayer to acknowledge
+wiiLoadFile(loadedFile, …);       // hand the new one over
+while(controlledbygui != 0) …     // wait for MPlayer to take it
+```
+
+MPlayer's side, at `play_next_file` (`mplayer.c`), frees the filename, sets
+`controlledbygui = 1` — **overwriting the GUI's 2, which is what releases the
+first wait** — then sleeps in a loop until a filename appears, and on leaving
+it sets `controlledbygui = 0`. It opens the file, finds no video stream, and at
+`if(controlledbygui == 0) controlledbygui = 1;` hands control straight back.
+
+So for an audio-only file, **0 exists only for as long as the demuxer and codec
+init take**. The MPlayer output in the same log, between the `play:` line and
+the `stuck:` line, shows exactly that window going by: `Audio only file format
+detected.` … `Selected audio codec: [ffmp3]` … `No video - returning control to
+GUI` … `Starting playback...`. The GUI polls every 100 µs and still missed it,
+and then waited for a 0 that was never coming round again. The music played,
+the browser stayed behind a "Loading..." window, nothing refreshed.
+
+The first file after boot always worked because MPlayer starts up already
+sitting at 0.
+
+**The fix is a fourth value.** The GUI now writes `controlledbygui = 3`,
+*handed over but not taken yet*, immediately before `wiiLoadFile()`, and waits
+for it to stop being 3:
+
+```c
+controlledbygui = 3;
+wiiLoadFile(loadedFile, partitionlabel);
+while(controlledbygui == 3) …
+```
+
+Nothing in `mplayer.c` tests for 3 — every test there is `== 0`, `== 1` or
+`== 2` — and MPlayer is parked in `play_next_file`'s sleep loop when the GUI
+writes it, executing nothing but `usleep()` and an `== 2` check. So the only
+thing that can clear the 3 is MPlayer picking the file up, whether it then
+settles on 0 or races on to 1. A transient no longer has to be caught in the
+act.
+
+The watchdog stays, now worded for the new wait. Waiting on a value that the
+other side only holds briefly is the bug; the lesson is worth more than the
+patch, because the same `int` still carries four meanings across two threads
+with no lock.
+
+### 11.13 Where it stands at the end of 2026-09-13
+
+**The handshake fix holds.** Build `20260913-221926`,
+`logs/20840921-111428-wiimc.log`: four files played in a row — 4.651 s, 8.321 s,
+11.363 s, 14.806 s, across two folders — with no `stuck:` line anywhere and the
+browser usable between them. The §11.12 race is closed.
+
+**A new crash, in a new place.** The log stops 28 ms after the fourth
+`play:`. `hb 7` at 14.834 s is on the card, `hb 8` was due at 16.85 s and never
+came. MPlayer had printed `mplayer: end film. UNINIT. err: 0` for the third
+file and had not yet printed a single line for the fourth — no `Playing .`, no
+`Audio only file format detected.` So the machine died **inside MPlayer's open
+of the fourth file**, before the demuxer had identified it.
+
+It is not memory: `mem free 10444K`, `low 10403K`, `oom 0`, and the figure had
+not drifted across the three previous loads.
+
+And `wiimc-crash.txt` is 24 KB of padding again — the fourth run in a row where
+the exception path builds its report and fails to write it (§11.8). That is now
+the most expensive open problem in this file: every crash costs a photograph.
+
+**The prime suspect, and it is only a suspect.** The MPlayer thread's stack.
+`MPLAYER_STACKSIZE` is 512 KB (`memalign` in `source/wiimc.cpp`), and the
+painted high-water mark reads
+
+```
+thr #7  entry 80023bac prio  68 ... stack 511560/524288
+```
+
+— **12728 bytes of margin, and the identical figure in each of the last three
+runs.** The crash falls in the deepest work that thread does. If the stack is
+what gave way, the fault is a DABR hit at the bottom of `mplayerstack` with
+`DSISR 02400000`, exactly the signature of §11.8, and one photograph settles it
+— the dump now stays on screen (§11.7).
+
+Two things to do first, in this order:
+
+1. **Photograph the dump.** `SRR0`, `DAR`, `DSISR`, and the stack chain resolve
+   against `deployed/wiimc-20260913-221926.elf`. That is one run and it either
+   confirms the stack or names something else entirely.
+2. **Raise `MPLAYER_STACKSIZE` and watch the number.** If the high-water mark
+   moves with the stack, 511560 was real and the stack was short. If it stays at
+   511560 with a larger stack, then the *measurement* is what is wrong — the
+   paint scan is reading something it should not, as it did in §11.6 — and the
+   suspect is cleared rather than fixed.

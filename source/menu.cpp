@@ -67,8 +67,15 @@ u32 getipbyname(char *domain)
 static void ResumeCreditsThread();
 
 #define THREAD_SLEEP 	200
-#define GSTACK 			(16384)
-#define GUITH_STACK 	(16384)
+// 64 KB, not the 16 KB this came with. source/fonts/font.ttf is OpenType/CFF
+// ("OTTO"), so every uncached glyph goes through FreeType 2.14's Adobe CFF
+// interpreter, which is a stack hog: on the sixth hardware run it took the
+// GUI thread 2136 bytes PAST the bottom of its 16 KB stack and onto libogc2's
+// DABR guard, in cf2_arrstack_init under GuiText::Draw (PORTING.md 11.8).
+// All four of these threads draw. The heartbeat reports the real high-water
+// mark, so this can be tightened once a run has measured it.
+#define GSTACK 			(65536)
+#define GUITH_STACK 	(65536)
 
 static u8 guistack[GSTACK] ATTRIBUTE_ALIGN (32);
 static u8 progressstack[GUITH_STACK] ATTRIBUTE_ALIGN (32);
@@ -2110,8 +2117,20 @@ CancelAction()
 		return;
 
 	// wait for thread to finish
-	while(!LWP_ThreadIsSuspended(progressthread))
-		usleep(THREAD_SLEEP);
+	{ // watchdog, see LoadMPlayerFile()
+		u64 waitStart = gettime();
+		bool said = false;
+		while(!LWP_ThreadIsSuspended(progressthread))
+		{
+			usleep(THREAD_SLEEP);
+			if(!said && diff_sec(waitStart, gettime()) >= 2)
+			{
+				said = true;
+				DebugMark("stuck: CancelAction, progress thread will not suspend (showProgress %d halt %d)",
+					showProgress, progressThreadHalt);
+			}
+		}
+	}
 }
 
 /****************************************************************************
@@ -2510,8 +2529,14 @@ static void CreditsWindow()
 	alignWindow.SetAlignment(ALIGN_CENTRE, ALIGN_TOP);
 	creditsWindow.Append(&alignWindow);
 
-	int numEntries = 15;
-	GuiText *txt[numEntries];
+	// Four of the entries below are under #if 0, so only 14 of the 15 slots
+	// this used to declare were ever filled -- and both loops at the end ran
+	// to 15, so txt[14], an uninitialised stack word, was Append()ed into the
+	// window, drawn, and then deleted. That is the crash on Z in a browse menu
+	// (PORTING.md 11.9). Size for every entry in the source and count what was
+	// actually filled, so re-enabling the #if 0 block cannot bring it back.
+	const int maxEntries = 18;
+	GuiText *txt[maxEntries];
 
 	wchar_t appVersion[20];
 	swprintf(appVersion, 20, L"%s %s GCN", gettext("Ver."), APPVERSION);
@@ -2600,6 +2625,7 @@ static void CreditsWindow()
 	txt[i]->SetPosition(0,y);
 	txt[i]->SetWrap(true, 500);
 #endif
+	int numEntries = i; // only the entries that were really built
 	for(i=0; i < numEntries; i++)
 		alignWindow.Append(txt[i]);
 
@@ -3592,8 +3618,19 @@ static int LoadNewFile()
 	} */
 
 	// wait until MPlayer is ready to take control (or return control)
-	while(!guiShutdown && controlledbygui != 1)
-		usleep(THREAD_SLEEP);
+	{ // watchdog, see LoadMPlayerFile()
+		u64 waitStart = gettime();
+		bool said = false;
+		while(!guiShutdown && controlledbygui != 1)
+		{
+			usleep(THREAD_SLEEP);
+			if(!said && diff_sec(waitStart, gettime()) >= 2)
+			{
+				said = true;
+				DebugMark("stuck: LoadNewFile wants controlledbygui==1, it is %d", controlledbygui);
+			}
+		}
+	}
 
 	if(guiShutdown)
 	{
@@ -7130,6 +7167,7 @@ static void MenuSettings()
 {
 	int ret;
 	int i = 0;
+	DebugMark("settings: entered");
 	
 	// SuSo: there is a memleak here!
 	// hmm, come here...
@@ -7180,19 +7218,24 @@ static void MenuSettings()
 	backBtn.SetTrigger(trigA);
 	backBtn.SetTrigger(trigB);
 
+	DebugMark("settings: building the option browser");
 	GuiOptionBrowser optionBrowser(screenwidth, 8, &options);
 	optionBrowser.SetPosition(0, 150);
 	optionBrowser.TriggerUpdate();
+	DebugMark("settings: option browser built");
 
 	SuspendGui();
 	mainWindow->Append(&optionBrowser);
 	mainWindow->Append(&backBtn);
 	mainWindow->Append(&titleTxt);
 	ResumeGui();
+	DebugMark("settings: appended, the GUI is running again");
+	bool firstPass = true;
 
 	while(menuCurrent == MENU_SETTINGS && !guiShutdown)
 	{
 		usleep(THREAD_SLEEP);
+		if(firstPass) { DebugMark("settings: first pass of the idle loop"); firstPass = false; }
 
 		ret = optionBrowser.GetClickedOption();
 

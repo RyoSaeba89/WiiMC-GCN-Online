@@ -187,11 +187,21 @@ deploy:
 	fi; \
 	mkdir -p logs deployed; \
 	for f in wiimc.log wiimc-prev.log wiimc-crash.txt wiimc-crash-prev.txt; do \
-		if [ -f "$(SDCARD)/$$f" ]; then \
-			dst="logs/$$(date -r "$(SDCARD)/$$f" +%Y%m%d-%H%M%S)-$$f"; \
-			[ -f "$$dst" ] || { cp -p "$(SDCARD)/$$f" "$$dst" && echo "deploy: fetched $$dst"; }; \
+		[ -f "$(SDCARD)/$$f" ] || continue; \
+		base="logs/$$(date -r "$(SDCARD)/$$f" +%Y%m%d-%H%M%S)-$$f"; \
+		dst="$$base"; n=2; \
+		while [ -f "$$dst" ] && [ "$$(md5sum < "$(SDCARD)/$$f")" != "$$(md5sum < "$$dst")" ]; do \
+			dst="$${base%.*}-$$n.$${base##*.}"; n=$$((n+1)); \
+		done; \
+		if [ -f "$$dst" ]; then \
+			echo "deploy: $$f already fetched as $$dst"; \
+		else \
+			cp -p "$(SDCARD)/$$f" "$$dst" || continue; \
+			echo "deploy: fetched $$dst"; \
 		fi; \
+		rm -f "$(SDCARD)/$$f" && echo "deploy: removed $$f from the card"; \
 	done; \
+	sync; \
 	cp $(OUTPUT).dol "$(SDCARD)/$(TARGET).dol" && sync; \
 	[ "$$(md5sum < $(OUTPUT).dol)" = "$$(md5sum < "$(SDCARD)/$(TARGET).dol")" ] || \
 		{ echo "deploy: FAILED, $(SDCARD)/$(TARGET).dol differs from the build"; exit 1; }; \
