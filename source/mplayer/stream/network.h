@@ -50,8 +50,12 @@
  * MPlayer sub-make needs no extra -I. */
 struct hostent *wiimc_gethostbyname(const char *name);
 #define gethostbyname(a) wiimc_gethostbyname(a)
-//#define closesocket(a) net_close(a)
-#define closesocket(a) 0
+/* This was `0` -- a no-op -- for as long as there was no net_close() to call,
+ * and with -lbba there is one. It matters more here than it looks: libogc2's
+ * FD_SETSIZE is 16 (network.h:160), every closesocket() that did nothing
+ * leaked one of those sixteen, and http.c calls it on every failed open. A
+ * dozen retries and the resolver's own UDP socket stops opening too. */
+#define closesocket(a) net_close(a)
 #define setsockopt(a, b, c, d, e) net_setsockopt(a, b, c, d, e)
 #define bind(a, b, c) net_bind(a, b, c)
 #define connect(a, b, c) net_connect(a, b, c)

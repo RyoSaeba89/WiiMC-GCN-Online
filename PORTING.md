@@ -107,6 +107,41 @@ and it should put the comments on lines of their own. The RTSP and RealMedia
 entries stay out deliberately — they were never wanted here and their absence
 is the one thing the accident got right.
 
+### 2.4 And `stream/http.c` is switched off from the inside as well
+
+Found by a hardware run, not by reading (§11.16). Putting the file back in the
+build is not enough: **six of its functions have their bodies commented out**,
+each with a failing `return` left in front. The file compiles, registers
+`stream_info_http1` in `auto_open_streams[]`, links with no warning and no
+missing symbol — and answers "I cannot open that" to every URL.
+
+| Function | What was left | What it should do |
+|---|---|---|
+| `open_s1`, `open_s2` | `return 0;//fixup_open(stream, seekable);` | `STREAM_ERROR` **is** 0, so this is an unconditional failure |
+| `fixup_open` | `return 0;` before everything | pick the ICY or the plain-HTTP reader |
+| `nop_streaming_start` | `return -1;` before everything | send the request, read the response, follow redirects |
+| `scast_streaming_start` | the whole ICY path commented | set up `Icy-MetaInt` de-interleaving |
+| `http_streaming_start` | `URL_t *url = NULL;` and, at `out:`, `stream->fd = fd;` commented | work on the stream's URL and hand the socket back |
+
+Nothing about a build can catch this: no symbol is missing, so the link closes.
+Only running it does. The git history holds one commit for this file
+(`8c25c17`, the import), so it arrived in this state and there is no clean
+copy to restore from — the commented-out originals are the copy, and phase 1
+puts them back verbatim.
+
+The same hand disabled `closesocket`:
+
+```c
+//#define closesocket(a) net_close(a)
+#define closesocket(a) 0
+```
+
+Reasonable while nothing defined `net_close`, and quietly expensive now:
+libogc2's `FD_SETSIZE` is **16** (`network.h:160`), `http.c` calls
+`closesocket()` on every failed open, and the GUI retries a failed stream in a
+loop. A dozen retries and the socket table is gone — including for the
+resolver's own UDP socket.
+
 ---
 
 ## 3. The two real gaps
@@ -578,6 +613,14 @@ Three things the link found that reading could not:
 
 DOL: 5860992 bytes, so MPlayer's side of the transport is another 30 KB on top
 of lwIP's 89 KB.
+
+*Lot 3 — make `http.c` do something (build `20260914-223510`).* The first
+hardware run of lot 2 (§11.16) showed the link, the playlist and the URL all
+working and MPlayer still answering "Failed to open". §2.4 is why: six
+functions in `stream/http.c` had their bodies commented out behind a failing
+`return`, and `closesocket` was `#define`d to `0`. Both restored. **Nothing on
+the network side of MPlayer has ever executed yet** -- the resolver,
+`connect2Server` and the ICY reader are all still unproven.
 
 
 ### Phase 2 — web radio
@@ -1474,3 +1517,48 @@ is validated separately before it reaches the resolver, and a `res >= 0` with
 an unusable address stops the retry loop instead of spending the rest of it.
 Without the label of §5.3 this would have read as a plain success -- "unknown
 adapter" is what gave it away.
+
+### 11.16 The first stream attempt: the link is not the problem
+
+Build `20260914-221604`, `logs/20840921-112120-wiimc.log`. The card carries
+`sd1:/music/radio-test.m3u`, six plain-`http://` MP3 stations taken from
+gcradio's `gcradio.conf` — stations that project probed from the PC on
+2026-08-04 and plays on this console.
+
+**Everything up to MPlayer works.**
+
+```
+[   10.813] net: up on Broadband Adapter, Serial Port 1 -- ip 192.168.68.57 mask 255.255.252.0 gw 192.168.68.1
+[   18.699] play: http://nectarine.from-de.com/necta192
+```
+
+The link comes up in 10.8 s again, the playlist parses, and the URL travels the
+whole way from the browser into `wiiLoadFile`. Both lots of phase 1 do their
+job. Note the `.m3u` route needs no phase 2 work: `m3u` is in
+`validPlaylistExtensions` and `http` is already in `validInternetProtocols`
+(`settings.h:237,247`), and `menu.cpp:4160` hands anything matching either to
+`BrowserChangeFolder()`.
+
+**And then it does not open.**
+
+```
+Playing .
+Failed to open http://nectarine.from-de.com/necta192.
+mplayer: end film. UNINIT. err: 0
+```
+
+on a loop, which is what "Loading..." on screen forever actually is. No
+resolver line, no `connect2Server`, no server response — because none of them
+ran. The cause is §2.4: `open_s1` returns `STREAM_ERROR` before doing anything,
+and so does everything under it.
+
+**What this run cost and what it bought.** Two builds passed a clean link while
+the HTTP path could not have worked at any point, and nothing short of running
+it would have said so. It also produced the `closesocket` finding of §2.4,
+which the retry loop would have turned into a socket-table exhaustion a few
+attempts later — a second bug the first one was hiding.
+
+Restored in build `20260914-223411` (six functions) and `closesocket` in the
+build after it. **The resolver, `connect2Server` and the ICY path have still
+never executed once.** The next hardware run is the first real test of any of
+them.

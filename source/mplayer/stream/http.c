@@ -222,8 +222,8 @@ static int scast_streaming_read(int fd, char *buffer, int size,
 static int scast_streaming_start(stream_t *stream) {
   int metaint;
   scast_data_t *scast_data;
-  HTTP_header_t *http_hdr = NULL;//stream->streaming_ctrl->data;
-  int is_ultravox = 0;//strcasecmp(stream->streaming_ctrl->url->protocol, "unsv") == 0;
+  HTTP_header_t *http_hdr = stream->streaming_ctrl->data;
+  int is_ultravox = strcasecmp(stream->streaming_ctrl->url->protocol, "unsv") == 0;
   if (!stream || stream->fd < 0 || !http_hdr)
     return -1;
   if (is_ultravox)
@@ -233,11 +233,11 @@ static int scast_streaming_start(stream_t *stream) {
     if (metaint <= 0)
       return -1;
   }
- // stream->streaming_ctrl->buffer = malloc(http_hdr->body_size);
-  //stream->streaming_ctrl->buffer_size = http_hdr->body_size;
-  //stream->streaming_ctrl->buffer_pos = 0;
- // memcpy(stream->streaming_ctrl->buffer, http_hdr->body, http_hdr->body_size);
- /* scast_data = malloc(sizeof(scast_data_t));
+  stream->streaming_ctrl->buffer = malloc(http_hdr->body_size);
+  stream->streaming_ctrl->buffer_size = http_hdr->body_size;
+  stream->streaming_ctrl->buffer_pos = 0;
+  memcpy(stream->streaming_ctrl->buffer, http_hdr->body, http_hdr->body_size);
+  scast_data = malloc(sizeof(scast_data_t));
   scast_data->metaint = metaint;
   scast_data->metapos = 0;
   scast_data->is_ultravox = is_ultravox;
@@ -248,7 +248,6 @@ static int scast_streaming_start(stream_t *stream) {
   stream->streaming_ctrl->prebuffer_size = 64 * 1024; // 64 KBytes
   stream->streaming_ctrl->buffering = 1;
   stream->streaming_ctrl->status = streaming_playing_e;
-  */
   return 0;
 }
 
@@ -257,9 +256,8 @@ static int nop_streaming_start( stream_t *stream ) {
 	char *next_url=NULL;
 	URL_t *rd_url=NULL;
 	int fd,ret;
-	//if( stream==NULL ) return -1;
-	return -1;
-/*
+	if( stream==NULL ) return -1;
+
 	fd = stream->fd;
 	if( fd<0 ) {
 		fd = http_send_request( stream->streaming_ctrl->url, 0 );
@@ -334,7 +332,6 @@ static int nop_streaming_start( stream_t *stream ) {
 	stream->streaming_ctrl->buffering = 1;
 	stream->streaming_ctrl->status = streaming_playing_e;
 	return 0;
-	*/
 }
 
 HTTP_header_t *
@@ -766,7 +763,7 @@ static int http_streaming_start(stream_t *stream, int* file_format) {
 	char *content_type;
 	const char *content_length;
 	char *next_url;
-	URL_t *url = NULL;//stream->streaming_ctrl->url;
+	URL_t *url = stream->streaming_ctrl->url;
 
 	do
 	{
@@ -874,8 +871,8 @@ static int http_streaming_start(stream_t *stream, int* file_format) {
 				// TODO: RFC 2616, recommand to detect infinite redirection loops
 				next_url = http_get_field( http_hdr, "Location" );
 				if( next_url!=NULL ) {
-					int is_ultravox = 0;//strcasecmp(stream->streaming_ctrl->url->protocol, "unsv") == 0;
-					//stream->streaming_ctrl->url = url_redirect( &url, next_url );
+					int is_ultravox = strcasecmp(stream->streaming_ctrl->url->protocol, "unsv") == 0;
+					stream->streaming_ctrl->url = url_redirect( &url, next_url );
 					if (!strcasecmp(url->protocol, "mms")) {
 						res = STREAM_REDIRECTED;
 						goto err_out;
@@ -908,17 +905,16 @@ err_out:
 	http_free( http_hdr );
 	http_hdr = NULL;
 out:
-	//stream->streaming_ctrl->data = (void*)http_hdr;
-	//stream->fd = fd;
+	stream->streaming_ctrl->data = (void*)http_hdr;
+	stream->fd = fd;
 	return res;
 }
 
 static int fixup_open(stream_t *stream,int seekable) {
-	//HTTP_header_t *http_hdr = stream->streaming_ctrl->data;
-	int is_icy = 0;//http_hdr && http_get_field(http_hdr, "Icy-MetaInt");
-	//int is_ultravox = strcasecmp(stream->streaming_ctrl->url->protocol, "unsv") == 0;
-return 0;
-/*
+	HTTP_header_t *http_hdr = stream->streaming_ctrl->data;
+	int is_icy = http_hdr && http_get_field(http_hdr, "Icy-MetaInt");
+	int is_ultravox = strcasecmp(stream->streaming_ctrl->url->protocol, "unsv") == 0;
+
 	stream->type = STREAMTYPE_STREAM;
 	if(!is_icy && !is_ultravox && seekable)
 	{
@@ -939,14 +935,13 @@ return 0;
 
 	fixup_network_stream_cache(stream);
 	return STREAM_OK;
-*/
 }
 
 static int open_s1(stream_t *stream,int mode, void* opts, int* file_format) {
 	int seekable=0;
 	URL_t *url;
 
-	/*stream->streaming_ctrl = streaming_ctrl_new();
+	stream->streaming_ctrl = streaming_ctrl_new();
 	if( stream->streaming_ctrl==NULL ) {
 		return STREAM_ERROR;
 	}
@@ -967,15 +962,15 @@ static int open_s1(stream_t *stream,int mode, void* opts, int* file_format) {
 		stream->streaming_ctrl = NULL;
 		return STREAM_UNSUPPORTED;
 	}
-*/
-	return 0;//fixup_open(stream, seekable);
+
+	return fixup_open(stream, seekable);
 }
 
 static int open_s2(stream_t *stream,int mode, void* opts, int* file_format) {
 	int seekable=0;
 	URL_t *url;
 
-	/*stream->streaming_ctrl = streaming_ctrl_new();
+	stream->streaming_ctrl = streaming_ctrl_new();
 	if( stream->streaming_ctrl==NULL ) {
 		return STREAM_ERROR;
 	}
@@ -994,8 +989,8 @@ static int open_s2(stream_t *stream,int mode, void* opts, int* file_format) {
 		stream->streaming_ctrl = NULL;
 		return STREAM_UNSUPPORTED;
 	}
-*/
-	return 0;//fixup_open(stream, seekable);
+
+	return fixup_open(stream, seekable);
 }
 
 
