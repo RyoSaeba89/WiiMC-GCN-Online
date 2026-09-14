@@ -552,6 +552,19 @@ label of §5.3.
 > LAN, and the screen names the adapter it found — on the DOL-015 and on the
 > ETH2GC.
 
+**The two halves of that criterion are tested by two different people.** Only
+the DOL-015 is on this desk; the ETH2GC belongs to a friend of the author and
+will be tested there, later and independently. So the phase closes in two
+steps, and the DOL-015 half is the one that gates any further work.
+
+What the ETH2GC tester should expect, so that a slow boot is not read as a
+hang: `if_config()` walks the drivers in order (§5.3), and the DOL-015 probe
+comes **first**. On a console with no BBA that probe has to fail before the
+SPI chips are tried — measured at 5.1 s to fail on its own (§11.15) — on top
+of whatever the ETH2GC then needs. The credits screen (Z) names the chip and
+the port it answered on, and `sd1:/wiimc.log` holds the `net:` lines; those two
+are the whole report, and they come back without the console.
+
 **Status: the link is up in the tree, untested on hardware.** Split in two so
 that an adapter problem and an MPlayer problem cannot arrive together.
 
