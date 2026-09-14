@@ -82,13 +82,20 @@ static u8 progressstack[GUITH_STACK] ATTRIBUTE_ALIGN (32);
 static u8 screensaverstack[GUITH_STACK] ATTRIBUTE_ALIGN (32);
 static u8 creditsstack[GUITH_STACK] ATTRIBUTE_ALIGN (32);
 
-char streamtitle[128]; // ICY data (http.c)
-char streamurl[128]; // ICY data (http.c)
-//extern char streamname[128]; // ICY data (http.c)
-static char streamname[128]; // ICY data (http.c)
-int streamtitle_changed;
-int streamurl_changed;
-int streamname_changed;
+// ICY metadata. stream/http.c owns these: it fills them as the stream sends
+// them and raises the _changed flags, and the audio bar below reads them.
+// They were definitions here only while http.c was out of the build (PORTING.md
+// 2.3) -- with it back in, two definitions of each is a link error, and
+// -fno-common is the default now. streamname in particular has to be the one
+// http.c writes, or the flag arrives and the text never changes.
+extern "C" {
+extern char streamtitle[128];
+extern char streamurl[128];
+extern char streamname[128];
+extern int streamtitle_changed;
+extern int streamurl_changed;
+extern int streamname_changed;
+}
 //int wii_error; // to display a specific error when loading fails
 
 // frequently used objects

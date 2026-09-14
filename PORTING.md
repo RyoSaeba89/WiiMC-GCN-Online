@@ -541,10 +541,43 @@ that an adapter problem and an MPlayer problem cannot arrive together.
   credits screen (Z): `NET: Broadband Adapter, Serial Port 1 - 192.168.1.x`,
   or `NET: none`.
 
-*Lot 2 — give MPlayer the transport.* Not started: `dns.c` from gcradio (§3.1),
-`CONFIG_NETWORKING`, and `stream/network.c` + `stream/http.c` back in
-`source/mplayer/Makefile`. The order matters -- without `dns.c` the link breaks
-the moment `stream/network.c` is compiled in.
+*Lot 2 — give MPlayer the transport (build `20260914-221604`).* In the tree,
+untested on hardware:
+
+- `source/utils/dns.c` and `dns.h`, gcradio's resolver (§3.1) unchanged, plus
+  two things it did not need there: an `extern "C"` guard, and
+  `wiimc_gethostbyname()`. MPlayer wants a `struct hostent *` back --
+  `connect2Server_with_af()` reads `h_addr_list[0]` and `h_length`
+  (`stream/tcp.c:163`) -- not the `u32` `dns_resolve()` hands out.
+- `stream/network.h`: `#define gethostbyname(a)` points at that shim. This is
+  the "one `#define`" §3.1 promised. Declared in place rather than included, so
+  the MPlayer sub-make needs no extra `-I`.
+- `config.h:318`: `#undef CONFIG_NETWORKING` becomes `#define`.
+- `netcb()` hands the DHCP gateway to `dns_set_server()` and flushes the cache.
+- The block of §2.3, rewritten one file per line with every comment on a line
+  of its own.
+
+Three things the link found that reading could not:
+
+1. **`asf_streaming.c` and `asf_mmst_streaming.c` are not in this tree.**
+   SuperrSonic dropped them. They were in the hashed part of the old list, so
+   nothing had noticed. `&stream_info_asf` now sits under `!defined(GEKKO)` in
+   `stream.c` beside the RTSP entries.
+2. **`streamtitle`, `streamurl`, `streamname` and their three `_changed` flags
+   were defined twice** -- in `stream/http.c` and again in `source/menu.cpp`,
+   whose comments already said "(http.c)". They were `extern` declarations
+   turned into definitions while http.c was out of the build, and `-fno-common`
+   is the default now. They are `extern "C"` again. `streamname` mattered most:
+   it was `static` in menu.cpp, so http.c would have raised the flag while the
+   menu read its own empty buffer.
+3. **Nothing in the GameCube menu reads those globals yet.** `menu.o` has no
+   reference to any of them, and `--gc-sections` drops them from the ELF: the
+   whole ICY display path is under `#if 0` at `menu.cpp:7690` and `:7740`. That
+   is phase 2's "ICY titles restored", and it is now the only thing standing
+   between a playing stream and a title on screen.
+
+DOL: 5860992 bytes, so MPlayer's side of the transport is another 30 KB on top
+of lwIP's 89 KB.
 
 
 ### Phase 2 — web radio
@@ -1384,3 +1417,60 @@ photograph per crash, and is still the first thing to fix the next time the
 exception path is entered.
 
 **Phase 0 is closed** (§8). Phase 1 starts with `-lbba` and `netcb()`.
+
+### 11.15 The network comes up (2026-09-14)
+
+Build `20260914-215005`, two boots on the card: `logs/20840921-111814-wiimc-prev.log`
+then `logs/20840921-111942-wiimc.log`.
+
+**It works, and the label earns its keep.**
+
+```
+[    0.759] net: if_config (dhcp), attempt 1
+[   11.531] net: up on Broadband Adapter, Serial Port 1 -- ip 192.168.68.57 mask 255.255.252.0 gw 192.168.68.1
+```
+
+Eighteen files played afterwards, `oom 0`, log ending clean at 55.330 s.
+
+**`if_config()` blocked for 10.77 seconds.** That is the single most useful
+number in this run. It is not an error path -- that is what a successful
+DOL-015 link negotiation costs. Had it been called on the boot path the screen
+would have sat there for eleven seconds with nothing to say, and the obvious
+conclusion would have been a hang. The heartbeat proves the thread was the
+right call: `hb 1` through `hb 5` fired on time at 2.746, 4.770, 6.785, 8.800
+and 10.820 s, straight through the block, and the menu drew throughout.
+
+**lwIP brings its own thread.** `thread: #12 entry 801e1ae4 stack 8073cb88
+size 32768 prio 220` appears between `hb 3` and `hb 4`, created inside
+`if_config()`. Priority 220 is above everything this program runs. Worth
+remembering when phase 2 starts competing for the DSP.
+
+Our own network thread (`thr #2`) peaks at **3200 bytes of its 32768**. Ten
+times more than it needs, and it can be cut if the memory is ever wanted.
+
+**The transport costs 558 KB of RAM.** `mem free` at `hb 1` goes from 12659K on
+build `20260913-221926` to 12101K here, and `arena1` lo moves from `8082b000`
+to `808ba000` -- 585728 bytes, of which 91136 is the larger DOL and the rest is
+lwIP's static buffers plus our 32 KB stack. Phase 2's cache sizing has that
+much less to work with than §11.14 measured.
+
+**A defect the first boot caught, which the second would have hidden.** The
+cable was not up on boot one:
+
+```
+[    5.797] net: if_config failed (-1) -- cable, link LED, or no adapter
+[    6.804] net: if_config (dhcp), attempt 2
+[    6.818] net: up on unknown adapter -- ip 255.255.255.255 mask 255.255.255.255 gw 255.255.255.255
+```
+
+The second call returned **success in 14 ms with the broadcast address in all
+three output buffers**, and the code believed it: `networkInit` went true and
+`dns_set_server()` was handed 255.255.255.255. libogc2 brings the stack up
+once; a second `if_config()` cannot un-fail the first, and what it writes into
+those buffers after a failure is not a lease.
+
+Fixed: `UsableAddress()` rejects `0.0.0.0` and `255.255.255.255`, the gateway
+is validated separately before it reaches the resolver, and a `res >= 0` with
+an unusable address stops the retry loop instead of spending the rest of it.
+Without the label of §5.3 this would have read as a plain success -- "unknown
+adapter" is what gave it away.

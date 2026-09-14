@@ -189,24 +189,32 @@ SRCS_COMMON-$(NATIVE_RTSP)           += stream/stream_rtsp.c \
                                         stream/librtsp/rtsp_rtp.c \
                                         stream/librtsp/rtsp_session.c \
 
+# Rewritten for phase 1 (PORTING.md sections 2.3 and 8). The list this replaces
+# looked like a continued list with two entries commented out; it was not. A '#'
+# runs to the end of the LOGICAL line and make joins continuations first, so
+# everything from the first hashed entry down was gone -- cookies, http,
+# network, pnm, rtp, udp, tcp and the rest. Only stream_netstream.c survived.
+#
+# So: one entry per line, and every comment on a line of its own.
+#
+# stream.c's auto_open_streams[] names stream_info_http1, _pnm, _rtp and _udp
+# unconditionally under CONFIG_NETWORKING, so those files have to be here for
+# the link to close. RTSP and RealMedia stay out: they are guarded out of that
+# table with !defined(GEKKO), they were never wanted here, and their absence is
+# the one thing the old accident got right. The ASF streaming sources are not
+# in this tree at all -- SuperrSonic dropped asf_streaming.c and
+# asf_mmst_streaming.c -- so stream_info_asf is guarded out of that table the
+# same way, in stream.c.
 SRCS_COMMON-$(NETWORKING)            += stream/stream_netstream.c \
-                                  #      stream/asf_mmst_streaming.c \
-                                  #      stream/asf_streaming.c \
                                         stream/cookies.c \
-                                 #       stream/http.c \
-                                 #       stream/network.c \
+                                        stream/http.c \
+                                        stream/network.c \
                                         stream/pnm.c \
                                         stream/rtp.c \
                                         stream/udp.c \
                                         stream/tcp.c \
                                         stream/stream_rtp.c \
-                                        stream/stream_udp.c \
-                                        stream/librtsp/rtsp.c \
-                                        stream/realrtsp/asmrp.c \
-                                        stream/realrtsp/real.c \
-                                        stream/realrtsp/rmff.c \
-                                        stream/realrtsp/sdpplin.c \
-                                        stream/realrtsp/xbuffer.c \
+                                        stream/stream_udp.c
 
 SRCS_COMMON-$(PNG)                   += libmpcodecs/vd_mpng.c
 SRCS_COMMON-$(POSTPROC)              += libmpcodecs/vf_pp.c

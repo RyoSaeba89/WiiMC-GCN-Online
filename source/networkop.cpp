@@ -26,6 +26,7 @@
 #include "libwiigui/gui.h"
 #include "utils/3ds.h"
 #include "utils/debuglog.h"
+#include "utils/dns.h"
 
 extern bool want3DS;
 
@@ -92,6 +93,21 @@ static void AdapterLabel(char *out, int max)
 	snprintf(out, max, "%s, %s", chip, port);
 }
 
+/* if_config() can return success and hand back an address that is not one.
+ * Seen on hardware (PORTING.md 11.15): the first call failed with -1, the
+ * second returned >= 0 in 14 ms with 255.255.255.255 for the address, the mask
+ * and the gateway. Believing it would have pointed the resolver at the
+ * broadcast address. */
+static bool UsableAddress(const char *s)
+{
+	struct in_addr a;
+
+	if(s == NULL || s[0] == 0 || !inet_aton(s, &a))
+		return false;
+
+	return a.s_addr != 0 && a.s_addr != 0xffffffff;
+}
+
 const char *NetworkAdapterName()
 {
 	if(netAdapter[0])
@@ -122,14 +138,40 @@ static void * netcb (void *arg)
 			DebugMark("net: if_config (dhcp), attempt %d", 4 - retry);
 			res = if_config(ip, mask, gw, true);
 
-			if(res >= 0 && ip[0])
+			if(res >= 0 && UsableAddress(ip))
 			{
+				struct in_addr a;
+
 				strncpy(wiiIP, ip, sizeof(wiiIP) - 1);
 				wiiIP[sizeof(wiiIP) - 1] = 0;
 				AdapterLabel(netAdapter, sizeof(netAdapter));
+
+				/* The resolver queries the gateway: DHCP hands one back, every
+				 * home router relays DNS, and there is no menu to configure a
+				 * server in. See PORTING.md 3.1. */
+				if(UsableAddress(gw) && inet_aton(gw, &a))
+				{
+					dns_set_server(a.s_addr);
+				}
+				else
+				{
+					dns_set_server(0);
+					DebugMark("net: no usable gateway ('%s') -- names will not resolve", gw);
+				}
+				dns_cache_flush();
+
 				DebugMark("net: up on %s -- ip %s mask %s gw %s",
 					netAdapter, wiiIP, mask, gw);
 				networkInit = true;
+				break;
+			}
+
+			if(res >= 0)
+			{
+				/* Success with a nonsense address. libogc2 brings the stack up
+				 * once; calling again cannot un-fail a first attempt that
+				 * failed, so spending the remaining tries on it is pointless. */
+				DebugMark("net: if_config returned %d but ip '%s' is not an address -- giving up", res, ip);
 				break;
 			}
 

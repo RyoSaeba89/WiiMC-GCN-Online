@@ -44,7 +44,12 @@
 #define recv(a, b, c, d) net_recv(a, b, c, d)
 #define select(a, b, c, d, e) net_select(a, b, c, d, e)
 #define socket(a, b, c) net_socket(a, b, c)
-#define gethostbyname(a) net_gethostbyname(a)
+/* net_gethostbyname() is declared in libogc's network.h but defined by no
+ * cube-side library -- see PORTING.md section 3.1. source/utils/dns.c
+ * provides the replacement. Declared here rather than included so that the
+ * MPlayer sub-make needs no extra -I. */
+struct hostent *wiimc_gethostbyname(const char *name);
+#define gethostbyname(a) wiimc_gethostbyname(a)
 //#define closesocket(a) net_close(a)
 #define closesocket(a) 0
 #define setsockopt(a, b, c, d, e) net_setsockopt(a, b, c, d, e)

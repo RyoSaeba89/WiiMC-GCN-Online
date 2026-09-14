@@ -97,7 +97,10 @@ static const stream_info_t* const auto_open_streams[] = {
   &stream_info_netstream,
   #endif
   &stream_info_http1,
+  #if !defined(GEKKO)
+  /* asf_streaming.c is not in this tree; see source/mplayer/Makefile. */
   &stream_info_asf,
+  #endif
   &stream_info_pnm,
   #if !defined(GEKKO)
   &stream_info_rtsp,
