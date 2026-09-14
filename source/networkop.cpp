@@ -7,6 +7,8 @@
  ****************************************************************************/
 
 #include <network.h>
+#include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <ogc/lwp_watchdog.h>
 #include <smb.h>
@@ -23,6 +25,7 @@
 #include "utils/gettext.h"
 #include "libwiigui/gui.h"
 #include "utils/3ds.h"
+#include "utils/debuglog.h"
 
 extern bool want3DS;
 
@@ -42,76 +45,99 @@ char wiiIP[16] = { 0 };
 static lwp_t networkthread = LWP_THREAD_NULL;
 static u8 netstack[32768] ATTRIBUTE_ALIGN (32);
 
+/* Which adapter answered, in words.
+ *
+ * This fork asks for none in particular: libogc2's if_config() tries the
+ * DOL-015 first, then the three SPI chips ETH2GC is built around (W6100,
+ * W5500, ENC28J60), and each of those probes Serial Port 1, then Serial
+ * Port 2, then the two memory card slots. So an ETH2GC needs no code of its
+ * own -- but nothing else then knows which one was found, and from the couch
+ * "no network" and "found the wrong adapter" look identical (PORTING.md 5.3).
+ *
+ * Every driver stamps the netif with two letters: the first identifies the
+ * chip, the second the port it answered on. Ported from gcradio,
+ * source/main.c, adapter_label(). */
+static char netAdapter[48] = "";
+
+static void AdapterLabel(char *out, int max)
+{
+	char ifn[8] = "";
+	const char *chip, *port;
+
+	if(!if_indextoname(1, ifn) || !ifn[0] || !ifn[1])
+	{
+		snprintf(out, max, "unknown adapter");
+		return;
+	}
+
+	switch(ifn[0])
+	{
+		case 'e': chip = "Broadband Adapter"; break; // "en", the DOL-015
+		case 'E': chip = "ENC28J60"; break;          // ETH2GC Sidecar / Lite
+		case 'W': chip = "W5500"; break;
+		case 'w': chip = "W6100"; break;
+		default:  chip = "adapter"; break;
+	}
+
+	switch(ifn[1])
+	{
+		case 'n':                                    // gcif is always SP1
+		case '1': port = "Serial Port 1"; break;
+		case '2': port = "Serial Port 2"; break;
+		case 'A': port = "card slot A"; break;
+		case 'B': port = "card slot B"; break;
+		default:  port = "?"; break;
+	}
+
+	snprintf(out, max, "%s, %s", chip, port);
+}
+
+const char *NetworkAdapterName()
+{
+	if(netAdapter[0])
+		return netAdapter;
+	return "none";
+}
+
 static void * netcb (void *arg)
 {
-#if 0
-	s32 res=-1;
-	int retry;
-	int wait;
-	static bool prevInit = false;
-
+#ifdef WANT_NETWORK
+	/* if_config() blocks, and it blocks for a long time: bringing the BBA's
+	 * link up takes seconds, and when nothing answers libogc2 walks four
+	 * drivers across four ports before giving up. That is what this thread is
+	 * for -- the GUI keeps drawing "Initializing network..." and stays
+	 * cancellable while the probe runs.
+	 *
+	 * DHCP only. There is no static-address setting anywhere in the menus to
+	 * read one from, and adding one is not phase 1. */
 	while(netHalt != 2)
 	{
-		retry = 5;
-		
-		while (retry > 0 && netHalt != 2)
+		int retry = 3;
+
+		while(retry > 0 && netHalt != 2 && !networkInit)
 		{
-			net_deinit();
-			
-			if(prevInit)
-			{
-				prevInit=false; // only call net_wc24cleanup once
-			#ifdef HW_RVL
-				net_wc24cleanup(); // kill wc24
-				usleep(10000);
-			#endif
-			}
-#ifdef HW_RVL
-			res = net_init_async(NULL, NULL);
-#endif
+			char ip[16] = "", mask[16] = "", gw[16] = "";
+			s32 res;
 
-			if(res != 0)
-			{
-				sleep(1);
-				retry--;
-				continue;
-			}
-#ifdef HW_RVL
-			res = net_get_status();
-#endif
-			wait = 500; // only wait 10 sec
+			DebugMark("net: if_config (dhcp), attempt %d", 4 - retry);
+			res = if_config(ip, mask, gw, true);
 
-			while (res == -EBUSY && wait > 0 && netHalt != 2)
+			if(res >= 0 && ip[0])
 			{
-				usleep(200000);
-#ifdef HW_RVL
-				res = net_get_status();
-#endif
-				wait--;
+				strncpy(wiiIP, ip, sizeof(wiiIP) - 1);
+				wiiIP[sizeof(wiiIP) - 1] = 0;
+				AdapterLabel(netAdapter, sizeof(netAdapter));
+				DebugMark("net: up on %s -- ip %s mask %s gw %s",
+					netAdapter, wiiIP, mask, gw);
+				networkInit = true;
+				break;
 			}
 
-			if (res == 0)
-			{
-				//3DS Controller
-			#ifdef WANT_3DS
-				if(want3DS)
-					CTRInit();
-			#endif
-				
-				struct in_addr hostip;
-				hostip.s_addr = net_gethostip();
-				
-				if (hostip.s_addr)
-				{
-					strcpy(wiiIP, inet_ntoa(hostip));
-					networkInit = true;
-					prevInit = true;
-					break;
-				}
-			}
-
+			DebugMark("net: if_config failed (%d) -- cable, link LED, or no adapter", res);
 			retry--;
-			usleep(2000);
+
+			if(retry > 0 && netHalt != 2)
+				sleep(1);
 		}
 
 		if(netHalt != 2)
@@ -120,7 +146,7 @@ static void * netcb (void *arg)
 			usleep(100);
 		}
 	}
-#endif	
+#endif
 	return NULL;
 }
 
@@ -133,10 +159,12 @@ void StartNetworkThread()
 {
 	netHalt = 0;
 
-	//if(networkthread == LWP_THREAD_NULL)
-	//	LWP_CreateThread(&networkthread, netcb, NULL, netstack, 32768, 40);
-	//else
-	//	LWP_ResumeThread(networkthread);
+#ifdef WANT_NETWORK
+	if(networkthread == LWP_THREAD_NULL)
+		LWP_CreateThread(&networkthread, netcb, NULL, netstack, sizeof(netstack), 40);
+	else
+		LWP_ResumeThread(networkthread);
+#endif
 }
 
 /****************************************************************************
@@ -161,12 +189,13 @@ static void StopNetworkThread()
 extern "C"{
 void CheckMplayerNetwork() //to use in cache2.c in mplayer
 {
-	//if(net_gethostip()==0)
-	if(1)
-	{
+#ifdef WANT_NETWORK
+	/* Called from cache2.c when a network read keeps failing: forget the
+	 * interface so the next InitializeNetwork() brings it up again. Do not
+	 * start the thread from here -- this runs on MPlayer's cache thread. */
+	if(net_gethostip() == 0)
 		networkInit = false;
-		//StartNetworkThread();	
-	}
+#endif
 }
 }
 
@@ -188,12 +217,18 @@ bool InitializeNetwork(bool silent)
 	if(networkInit)
 		return true;
 
+#ifndef WANT_NETWORK
+	return false; // built without the transport, and the wait below would spin
+#else
 	ShowAction("Initializing network...", networkInitCallback);
 	cancelNetworkInit = false;
 
 	while(!networkInit)
 	{
 		StartNetworkThread();
+
+		if(networkthread == LWP_THREAD_NULL)
+			break; // the thread could not be created; do not spin on it
 
 		while (!LWP_ThreadIsSuspended(networkthread) && !cancelNetworkInit)
 			usleep(50 * 1000);
@@ -207,6 +242,7 @@ bool InitializeNetwork(bool silent)
 	CancelAction();
 
 	return networkInit;
+#endif
 }
 
 void CloseShare(int num)

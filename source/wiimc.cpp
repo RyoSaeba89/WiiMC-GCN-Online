@@ -1287,8 +1287,13 @@ int main(int argc, char *argv[])
 	DebugMark("boot: app path '%s'%s", appPath,
 		appPath[0] ? "" : " -- NOT FOUND, playback will refuse to start");
 	
-	//StartNetworkThread(); //to set net heap aside MEM2 area
-	//usleep(100); //force network thread execution
+	// Phase 1: bring the interface up in the background. if_config() blocks for
+	// seconds -- longer when no adapter answers and libogc2 walks all four
+	// drivers -- so it must not be on the boot path. Nothing waits on it here;
+	// the menu stays usable and the credits screen (Z) names what was found.
+	DebugMark("boot: StartNetworkThread");
+	StartNetworkThread();
+	usleep(100); //force network thread execution
 #if 0
 	u32 size = ( (1024*MAX_HEIGHT)+((MAX_WIDTH-1024)*MAX_HEIGHT) + (1024*(MAX_HEIGHT/2)*2) ) + // textures
                 (vmode->fbWidth * vmode->efbHeight * 4) + //videoScreenshot

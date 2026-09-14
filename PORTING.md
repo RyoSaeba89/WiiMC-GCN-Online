@@ -517,6 +517,36 @@ label of §5.3.
 > LAN, and the screen names the adapter it found — on the DOL-015 and on the
 > ETH2GC.
 
+**Status: the link is up in the tree, untested on hardware.** Split in two so
+that an adapter problem and an MPlayer problem cannot arrive together.
+
+*Lot 1 — bring the interface up (build `20260914-215005`).* Done:
+
+- `Makefile.gc` gains `ENABLE_NETWORK` and links `-lbba`. It goes in `NETLIBS`,
+  ahead of `-logc`, not appended like the other toggles: `libbba.a` is where
+  `if_config`, `if_configex`, `if_indextoname`, `net_gethostip` and `net_init`
+  live, and `libogc.a` defines none of them. Cost: the DOL goes from 5739360 to
+  5830496 bytes, so the whole lwIP stack is 89 KB.
+- `netcb()` has a GameCube body: `if_config()` with DHCP, three attempts a
+  second apart, `wiiIP` filled, a `DebugMark` per attempt and on the result. It
+  stays on its own thread because `if_config()` blocks for seconds -- longer
+  when nothing answers and libogc2 walks four drivers across four ports -- and
+  the menu has to stay drawn and cancellable meanwhile.
+- `StartNetworkThread()` creates the thread again (it was commented out), and
+  `wiimc.cpp` calls it at boot without waiting on it.
+- `CheckMplayerNetwork()` tests `net_gethostip()` again instead of `if(1)`.
+- `InitializeNetwork()` no longer spins on `LWP_ThreadIsSuspended(NULL)` when
+  the thread was never created.
+- The adapter label of §5.3, ported from gcradio's `adapter_label()`, on the
+  credits screen (Z): `NET: Broadband Adapter, Serial Port 1 - 192.168.1.x`,
+  or `NET: none`.
+
+*Lot 2 — give MPlayer the transport.* Not started: `dns.c` from gcradio (§3.1),
+`CONFIG_NETWORKING`, and `stream/network.c` + `stream/http.c` back in
+`source/mplayer/Makefile`. The order matters -- without `dns.c` the link breaks
+the moment `stream/network.c` is compiled in.
+
+
 ### Phase 2 — web radio
 
 `https` into `validInternetProtocols`; ICY titles restored; Online Media menu

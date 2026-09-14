@@ -35,6 +35,12 @@ ENABLE_WIIMOTE                = 0
 ENABLE_SMB                    = 0
 ENABLE_3DS                    = 0
 
+# The network transport (PORTING.md section 8, phase 1). -lbba is libogc2's
+# lwIP stack plus the drivers: the DOL-015 first, then the three SPI chips
+# ETH2GC is built around. It has to be linked ahead of -logc, so it goes in
+# NETLIBS rather than being appended like the toggles below.
+ENABLE_NETWORK                = 1
+
 # Log file, crash report and hang diagnostics on sd1:/wiimc.log.
 # See source/utils/debuglog.c and PORTING.md section 11.
 ENABLE_DEBUGLOG               = 1
@@ -48,9 +54,14 @@ LDFLAGS		=	-g $(MACHDEP) -Wl,-wrap,memcpy
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project
 #---------------------------------------------------------------------------------
+ifeq ($(ENABLE_NETWORK), 1)
+CFLAGS += -DWANT_NETWORK
+NETLIBS := -lbba
+endif
+
 LIBS    := -lmplayerwii -lavformat -lavcodec -lswscale -lavutil \
                         -ljpeg -liconv -lpng -lz \
-                        -lfat -logc -lfreetype -lmxml -lexif \
+                        -lfat $(NETLIBS) -logc -lfreetype -lmxml -lexif \
                         -lbrotlidec -lbrotlicommon -lbz2
 
 ifeq ($(ENABLE_NTFS), 1)

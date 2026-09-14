@@ -30,6 +30,7 @@ struct FTPSettings {
 void UpdateCheck();
 bool DownloadUpdate();
 void StartNetworkThread();
+const char *NetworkAdapterName();
 bool InitializeNetwork(bool silent);
 bool ConnectShare (int num, bool silent);
 void CloseShare(int num);

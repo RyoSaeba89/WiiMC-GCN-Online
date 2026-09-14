@@ -2535,7 +2535,7 @@ static void CreditsWindow()
 	// window, drawn, and then deleted. That is the crash on Z in a browse menu
 	// (PORTING.md 11.9). Size for every entry in the source and count what was
 	// actually filled, so re-enabling the #if 0 block cannot bring it back.
-	const int maxEntries = 18;
+	const int maxEntries = 20;
 	GuiText *txt[maxEntries];
 
 	wchar_t appVersion[20];
@@ -2561,6 +2561,17 @@ static void CreditsWindow()
 	txt[i] = new GuiText(iosVersion, 16, (GXColor){255, 255, 255, 255});
 	txt[i]->SetAlignment(ALIGN_RIGHT, ALIGN_TOP);
 	txt[i]->SetPosition((screenwidth/2)-45,56); i++;
+
+	// The adapter that answered, and the address it got. This screen is the
+	// only place either is visible, and without it "no network" and "found the
+	// wrong adapter" look the same from the couch (PORTING.md 5.3).
+	char netLine[80];
+	snprintf(netLine, sizeof(netLine), "NET: %s%s%s", NetworkAdapterName(),
+		wiiIP[0] ? " - " : "", wiiIP[0] ? wiiIP : "");
+
+	txt[i] = new GuiText(netLine, 16, (GXColor){255, 255, 255, 255});
+	txt[i]->SetAlignment(ALIGN_RIGHT, ALIGN_TOP);
+	txt[i]->SetPosition((screenwidth/2)-45,76); i++;
 
 	txt[i] = new GuiText(" ", 16, (GXColor){255, 255, 255, 255});
 	txt[i]->SetAlignment(ALIGN_CENTRE, ALIGN_TOP);
