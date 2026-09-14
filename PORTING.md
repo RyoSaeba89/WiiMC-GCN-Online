@@ -496,13 +496,15 @@ Install `ppc-mxml`, `ppc-libexif`, `ppc-libiconv`; repair the stale paths in
 > **Done when** an unmodified `wiimc.dol` built here plays a file from the card
 > on the console. Until then no regression can be attributed to anything.
 
-**Status: builds clean, crashes on the console with nothing on screen.** The
-five problems of §7.3 are fixed and `make -f Makefile.gc` produces a 5.7 MB
-`wiimc.dol` with no errors. The first hardware run (2026-09-12) crashed without
-a register dump, and the tree had no way to say why: §11 adds the log that
-does. **Phase 1 does not start until the baseline plays a file**, because a
-baseline that has only ever been compiled proves nothing about the four phases
-that follow.
+**Status: done, on hardware (2026-09-14).** The five problems of §7.3 are fixed
+and `make -f Makefile.gc` produces a 5.7 MB `wiimc.dol` with no errors. Getting
+from that to a file playing took the log of §11 and five distinct faults
+(§§11.8-11.13): the GUI thread's stack, the credits array, the SD interface
+mismatch, the device thread clearing `isInserted`, and the `controlledbygui`
+race. The run of §11.14 closes the phase — **fifteen files played one after the
+other from the card, the browser used between each, no crash, memory flat.**
+The baseline is reproducible, so a regression from here can be attributed.
+**Phase 1 is open.**
 
 ### Phase 1 — switch the transport back on
 
@@ -1288,3 +1290,67 @@ Two things to do first, in this order:
    511560 with a larger stack, then the *measurement* is what is wrong — the
    paint scan is reading something it should not, as it did in §11.6 — and the
    suspect is cleared rather than fixed.
+
+> **Answered in §11.14, without a second crash.** The crash did not reproduce —
+> the same binary played fifteen files including the one that killed it — and
+> the high-water mark froze at 511560 for the whole run, which is the second
+> case: the measurement is what is wrong, the stack is cleared.
+
+### 11.14 The run of 2026-09-14: the baseline holds
+
+Same binary as §11.13 — build `20260913-221926`, nothing recompiled — run
+again from the card. Log: `logs/20840921-111648-wiimc.log`.
+
+**Fifteen files, no crash.** `play:` lines from 5.904 s to 48.402 s, across the
+same two folders, with the browser walked between each one. No `stuck:`
+anywhere, no register dump, no `[log buffer overran]`. The run ends on `hb 31`
+at 63.096 s, in the middle of the fifteenth track, with no `main: exit
+requested` — the console was switched off while it was still playing. (The
+`<<<<<<<< end of log >>>>>>>>` marker is written by every flush, `debuglog.c:250`,
+so it locates the newest line and says nothing about how the run ended.)
+
+**The §11.13 crash did not reproduce, and it is not the file.** It died opening
+`F-Zero X OST - 04 - Decide in the Eyes.mp3`. That file opened and played here
+at 16.491 s, and the run went on through eleven more. One occurrence, no dump,
+not deterministic, not file-specific: it stays on the books as an unexplained
+fault, to be picked up again if it returns with a photograph.
+
+**Memory is flat across fifteen opens.** 12659K free at `hb 1`, 10409K at
+`hb 24` through `hb 31`, `low 10345K`, `oom 0`, and the figure does not drift
+by more than a kilobyte between loads. No leak per file.
+
+**The stack suspect of §11.13 is cleared — and the measurement is what is
+wrong.** The MPlayer thread's painted high-water mark reads
+
+```
+hb  1   thr #7 ... stack  10696/524288   (before any file was opened)
+hb  6   thr #7 ... stack 511560/524288
+hb 11   thr #7 ... stack 511560/524288
+hb 16   thr #7 ... stack 511560/524288
+hb 21   thr #7 ... stack 511560/524288
+hb 26   thr #7 ... stack 511560/524288
+```
+
+It jumps to 511560 on the first file and then does not move by a single byte
+across fourteen more opens — two of those dumps were taken from a different
+call chain, one of them at a different `sp`. A real high-water mark drifts;
+this one does not. So 511560 is not the deepest the thread has gone — it is
+where the paint scan stops finding its pattern, i.e. the topmost word that
+something clobbered once, 12728 bytes from the bottom of the region. §11.6 had
+the same class of bug in the same scan.
+
+That settles §11.13's second question without spending a run on it: **this run
+reached 511560 too, fifteen times over, and nothing crashed.** 511560 was never
+a near-overflow, so the stack cannot be what killed the fourth file. Do not
+raise `MPLAYER_STACKSIZE` on the strength of that number — fix or distrust the
+scan instead. What paints `mplayerstack`, and what writes 12728 bytes above its
+base before the first `play:`, is worth ten minutes when the log is next
+touched; it is not worth blocking Phase 1.
+
+**Still open, unchanged.** `wiimc-crash.txt` came back 24 KB of padding for the
+fifth boot in a row, but this run never crashed, so it proves nothing new. The
+write-from-an-exception-context problem of §11.8 is still there, still costing a
+photograph per crash, and is still the first thing to fix the next time the
+exception path is entered.
+
+**Phase 0 is closed** (§8). Phase 1 starts with `-lbba` and `netcb()`.
