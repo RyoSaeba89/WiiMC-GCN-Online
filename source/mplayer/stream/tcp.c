@@ -55,7 +55,22 @@
 
 #if defined(GEKKO)
 #include <ogc/lwp_watchdog.h>
-#define IOS_O_NONBLOCK				0x04
+
+/* The non-blocking flag libogc2's lwIP actually reads in net_fcntl(), and the
+ * two wrong ones that are within reach here. Both fail silently.
+ *
+ *   IOS_O_NONBLOCK 0x04  - what this file used. It is the Wii/IOS value and
+ *                          means nothing to the GameCube's lwIP.
+ *   O_NONBLOCK    0x4000 - newlib's (sys/_default_fcntl.h:23,58). libogc2
+ *                          defines 04000 but only "#ifndef O_NONBLOCK"
+ *                          (network.h:154), and <fcntl.h> is included above,
+ *                          so newlib wins wherever the name is written.
+ *
+ * With the wrong bit the socket stays blocking, net_connect() does not return
+ * until the TCP stack gives up, and the 8-second escape below -- which is
+ * tested only after net_connect() returns -- is unreachable. That is the
+ * freeze of PORTING.md 11.18. */
+#define LWIP_O_NONBLOCK				04000U
 #endif
 
 /* IPv6 options */
@@ -207,21 +222,38 @@ connect2Server_with_af(char *host, int port, int af,int verb) {
 	u32 nodelay = 1;
 	net_setsockopt(socket_server_fd,IPPROTO_TCP,TCP_NODELAY,&nodelay,sizeof(nodelay));
 
-	net_fcntl(socket_server_fd, F_SETFL, net_fcntl(socket_server_fd, F_GETFL, 0) | IOS_O_NONBLOCK);
+	{
 	u64 t1,t2;
+	int flags;
+
+	flags = net_fcntl(socket_server_fd, F_GETFL, 0);
+	net_fcntl(socket_server_fd, F_SETFL, flags | LWIP_O_NONBLOCK);
+	MPlayerNetMark("nonblock flags", net_fcntl(socket_server_fd, F_GETFL, 0));
+
 	t1=ticks_to_millisecs(gettime());
 	do {
 		ret = net_connect(socket_server_fd,(struct sockaddr*)&server_address,server_address_size);
+		if(ret == -EISCONN) break;
 		t2=ticks_to_millisecs(gettime());
 		if(t2-t1 > 8000) break; // 8 secs to try to connect
-		usleep(500);
-	}while(ret != -EISCONN);
+		/* 20 ms, not the 500 us this used to poll at. On a non-blocking
+		 * socket net_connect() returns immediately every time, and at half a
+		 * millisecond this loop is a spin: it runs sixteen thousand times in
+		 * its eight seconds and starves every thread below MPlayer's
+		 * priority, the GUI and the heartbeat included. Four hundred
+		 * iterations are plenty to catch a connect. */
+		usleep(20000);
+	}while(1);
+
+	MPlayerNetMark("connect", ret);
+
 	if(ret != -EISCONN)
 	{		
 		closesocket(socket_server_fd);
 		return TCP_ERROR_PORT;
 	}
-	net_fcntl(socket_server_fd, F_SETFL, net_fcntl(socket_server_fd, F_GETFL, 0) & ~IOS_O_NONBLOCK);		
+	net_fcntl(socket_server_fd, F_SETFL, net_fcntl(socket_server_fd, F_GETFL, 0) & ~LWIP_O_NONBLOCK);
+	}
 #elif !HAVE_WINSOCK2_H
 	fcntl( socket_server_fd, F_SETFL, fcntl(socket_server_fd, F_GETFL) | O_NONBLOCK );
 #else

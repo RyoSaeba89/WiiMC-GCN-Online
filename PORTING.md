@@ -1638,3 +1638,90 @@ RST leaves `net_recv()` blocked forever. `net_select()` is the only real
 timeout here. That is a separate defect from this freeze, it has not bitten
 yet because no connection has ever been made, and it will need fixing before
 web radio can survive a dropped stream.
+
+### 11.18 The resolver is innocent; `connect2Server` is not
+
+Build `20260914-224755`, `logs/20840921-112328-wiimc.log`. The instrumentation
+of §11.17 did its job on the first run.
+
+**DNS works, and works well.**
+
+```
+[   16.894] dns: gethostbyname('nectarine.from-de.com')
+[   16.902] dns: query 'nectarine.from-de.com' id 1, 39 bytes, server c0a84401
+[   16.907] dns: net_socket -> 1
+[   16.915] dns: try 1, net_sendto...
+[   16.924] dns: net_sendto -> 39
+[   16.931] dns: net_select...
+[   16.971] dns: net_select -> 1
+[   16.978] dns: net_recvfrom -> 55
+[   16.986] dns: 'nectarine.from-de.com' -> 58c619d7
+```
+
+Ninety-two milliseconds, one try, first answer accepted. gcradio's `dns.c`
+works unchanged on this console, from MPlayer's thread, with the GUI drawing.
+The priority-220 suspicion of §11.17 was wrong, and cost one run to disprove —
+which is what it was for.
+
+**The freeze is the next thing that happens.** `connect2Server_with_af` resolves
+the name and then enters its GameCube branch, and the log ends there.
+
+**Two wrong constants, both silent.** The branch turns the socket non-blocking
+so it can time out on the connect:
+
+```c
+#define IOS_O_NONBLOCK 0x04
+net_fcntl(fd, F_SETFL, net_fcntl(fd, F_GETFL, 0) | IOS_O_NONBLOCK);
+```
+
+`0x04` is the **Wii/IOS** value. libogc2's lwIP reads **04000** — octal, 0x800
+(`network.h:154`). The bit never lands, and the socket stays blocking.
+
+Writing `O_NONBLOCK` instead would not have helped: newlib defines it as
+**0x4000** (`sys/_default_fcntl.h:23,58`), libogc2 defines 04000 only
+`#ifndef O_NONBLOCK`, and `tcp.c` includes `<fcntl.h>` at line 30 — long before
+`network.h` at line 51. So newlib wins wherever the name is written in this
+file, and there are **three** plausible values of which only one works.
+
+**And the timeout cannot fire.** The loop was
+
+```c
+do {
+    ret = net_connect(...);
+    t2 = ticks_to_millisecs(gettime());
+    if (t2 - t1 > 8000) break;   // 8 secs to try to connect
+    usleep(500);
+} while (ret != -EISCONN);
+```
+
+The eight-second escape is tested **after** `net_connect()` returns. On a socket
+that never became non-blocking, `net_connect()` does not return until the TCP
+stack gives up on its own — so the escape is unreachable and the hang is
+permanent. The one guard against this was disarmed by the other bug.
+
+**The 500 µs poll is a third defect, and it explains the rest of the symptom.**
+Once the flag is right, `net_connect()` returns immediately on every call, and
+at half a millisecond the loop runs sixteen thousand times across its eight
+seconds without ever really sleeping. That starves every thread below MPlayer's
+priority — the GUI, and the heartbeat that would otherwise have kept writing.
+It is why the log stops dead rather than continuing past a merely blocked
+MPlayer, and why the screen froze instead of sitting on "Loading...". Raised to
+20 ms: four hundred iterations, ample for a connect.
+
+**Fixed:** the flag, the loop condition (break on `-EISCONN` before the
+timeout test), and the poll interval. Plus `MPlayerNetMark()` in
+`networkop.cpp`, declared in `stream/network.h` — a breadcrumb MPlayer can drop
+that is **flushed to the card before it returns**. The MPlayer sub-make gets no
+`-DWANT_DEBUGLOG`, so `DebugMark` is not visible in that tree; routing through
+a function on this side also means `ENABLE_DEBUGLOG = 0` yields an empty
+function rather than an undefined symbol. It marks the flags actually read back
+after the `fcntl`, and the `ret` the connect loop ends on.
+
+Shipped in build `20260914-225958`.
+
+**What the next run should show:** `net: nonblock flags = 2048` — 04000, proof
+the bit landed — and then `net: connect = -127` (`-EISCONN`) within a few
+hundred milliseconds. Anything else, and the number says which. After that the
+console reaches `http_send_request()`, and everything past it — the server's
+response, `scast_streaming_start` and the ICY de-interleaving — is code that
+has still never run.

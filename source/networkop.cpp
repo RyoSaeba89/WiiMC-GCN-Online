@@ -229,6 +229,17 @@ static void StopNetworkThread()
 }
 
 extern "C"{
+/* A breadcrumb MPlayer can drop that is flushed to the card before it returns.
+ * It lives here rather than in the MPlayer tree because the sub-make does not
+ * get -DWANT_DEBUGLOG, so DebugMark is not visible there -- and because this
+ * way ENABLE_DEBUGLOG = 0 turns it into an empty function instead of an
+ * undefined symbol. For diagnosing a freeze, where anything merely buffered
+ * is lost (PORTING.md 11.18). */
+void MPlayerNetMark(const char *what, int value)
+{
+	DebugMark("net: %s = %d", what, value);
+}
+
 void CheckMplayerNetwork() //to use in cache2.c in mplayer
 {
 #ifdef WANT_NETWORK

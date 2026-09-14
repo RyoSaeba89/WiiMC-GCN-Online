@@ -49,6 +49,9 @@
  * provides the replacement. Declared here rather than included so that the
  * MPlayer sub-make needs no extra -I. */
 struct hostent *wiimc_gethostbyname(const char *name);
+
+/* source/networkop.cpp. Timestamped, and on the card before it returns. */
+void MPlayerNetMark(const char *what, int value);
 #define gethostbyname(a) wiimc_gethostbyname(a)
 /* This was `0` -- a no-op -- for as long as there was no net_close() to call,
  * and with -lbba there is one. It matters more here than it looks: libogc2's
