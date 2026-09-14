@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "dns.h"
+#include "debuglog.h"
 
 #define DNS_PORT     53
 #define DNS_TIMEOUT  2       /* seconds to wait per attempt */
@@ -212,7 +213,14 @@ static int dns_query(u32 server, const char *host, u32 *ip)
 	qlen = dns_build_query(q, sizeof(q), host, id);
 	if (qlen < 0) return -1;
 
+	/* Instrumented because the first execution of this function froze the
+	 * whole machine, heartbeat included, with nothing on screen and no dump
+	 * (PORTING.md 11.17). Each mark is flushed to the card before it returns,
+	 * so the last one in the log names the call that did not come back. */
+	DebugMark("dns: query '%s' id %u, %d bytes, server %08x", host, id, qlen, server);
+
 	s = net_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	DebugMark("dns: net_socket -> %d", s);
 	if (s < 0) return -1;
 
 	/* FD_SETSIZE is only 16 in libogc, and FD_SET checks nothing. */
@@ -224,21 +232,31 @@ static int dns_query(u32 server, const char *host, u32 *ip)
 	to.sin_addr.s_addr = server;
 
 	for (try = 0; try < DNS_TRIES; try++) {
-		if (net_sendto(s, q, qlen, 0, (struct sockaddr *)&to, sizeof(to)) != qlen)
+		int sent, sel;
+
+		DebugMark("dns: try %d, net_sendto...", try + 1);
+		sent = net_sendto(s, q, qlen, 0, (struct sockaddr *)&to, sizeof(to));
+		DebugMark("dns: net_sendto -> %d", sent);
+		if (sent != qlen)
 			continue;
 
 		FD_ZERO(&rfds);
 		FD_SET(s, &rfds);
 		tv.tv_sec  = DNS_TIMEOUT;
 		tv.tv_usec = 0;
-		if (net_select(s + 1, &rfds, NULL, NULL, &tv) <= 0) continue;
+		DebugMark("dns: net_select...");
+		sel = net_select(s + 1, &rfds, NULL, NULL, &tv);
+		DebugMark("dns: net_select -> %d", sel);
+		if (sel <= 0) continue;
 
 		fl = sizeof(from);
 		n  = net_recvfrom(s, r, sizeof(r), 0, (struct sockaddr *)&from, &fl);
+		DebugMark("dns: net_recvfrom -> %d", n);
 		if (n <= 0) continue;
 
 		if (dns_parse_response(r, n, id, ip, NULL) == 0) {
 			net_close(s);
+			DebugMark("dns: '%s' -> %08x", host, *ip);
 			cache_put(host, *ip);
 			return 0;
 		}
@@ -247,6 +265,7 @@ static int dns_query(u32 server, const char *host, u32 *ip)
 	}
 
 	net_close(s);
+	DebugMark("dns: '%s' not resolved after %d tries", host, DNS_TRIES);
 	return -1;
 }
 
@@ -287,8 +306,13 @@ struct hostent *wiimc_gethostbyname(const char *name)
 	static u32   addr;
 	static char  namebuf[128];
 
+	DebugMark("dns: gethostbyname('%s')", name ? name : "(null)");
+
 	if (dns_resolve(name, &addr) != 0)
+	{
+		DebugMark("dns: gethostbyname('%s') failed", name ? name : "(null)");
 		return NULL;
+	}
 
 	snprintf(namebuf, sizeof(namebuf), "%s", name);
 

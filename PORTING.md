@@ -1575,3 +1575,66 @@ Restored in build `20260914-223411` (six functions) and `closesocket` in the
 build after it. **The resolver, `connect2Server` and the ICY path have still
 never executed once.** The next hardware run is the first real test of any of
 them.
+
+### 11.17 The resolver freezes the whole machine
+
+Build `20260914-223510`, `logs/20840921-112210-wiimc.log`. The restored
+`http.c` of §2.4 gets further than anything before it, and then the console
+stops dead with a loud continuous tone from the speakers.
+
+```
+[   18.671] hb 9  | oom 0 | ...
+stream s->error: 0
+Resolving nectarine.from-de.com for AF_INET...
+[   20.687] hb 10 | oom 0 | ...
+<<<<<<<< end of log >>>>>>>>
+```
+
+**The place is exact.** `Resolving %s for AF_INET...` is
+`MSGTR_MPDEMUX_NW_ResolvingHostForAF`, printed by `connect2Server_with_af`
+(`stream/tcp.c`) on the line before it calls `gethostbyname` — which is our
+`wiimc_gethostbyname` and therefore `dns_resolve`, executing for the first time
+in this project's life.
+
+**It is a system-wide stop, not a blocked thread.** The heartbeat runs at
+priority 40, MPlayer's thread at 68; a `net_select()` that never returns would
+block MPlayer and leave `hb 11` to appear two seconds later. Nothing appeared.
+Every thread stopped. The tone is the audio DMA repeating its last buffer with
+nobody left to refill it, which also says interrupts were still being taken.
+
+**What that narrows it to.** Something is running that nothing else can
+preempt, or interrupts were disabled and never restored. There is exactly one
+new thing above everything else in this program: `thread: #12`, lwIP's own,
+created inside `if_config()` at **priority 220** (§11.15). A spin there
+freezes a priority-68 MPlayer and a priority-40 heartbeat alike.
+
+**Two things ruled out rather than assumed:**
+
+- *Not an EXI bus conflict.* The DOL-015 is EXI channel 0 and the SD Gecko in
+  slot B is channel 1 (§5.1). Different channels; the card and the adapter do
+  not share a bus.
+- *Not our DABR guard.* `debuglog.c` only ever **reads** `DABR` (`mfspr(1013)`,
+  `current_guard()`) so that the stack paint does not write over libogc2's own
+  guard. This project arms nothing.
+
+**Why gcradio does not hit this.** It runs the same `dns.c`, on the same
+adapter, on the same console. What differs is the caller: gcradio resolves from
+its main thread in a program whose other threads are its own, while here the
+call arrives on MPlayer's thread with a GUI thread drawing and a heartbeat
+writing to the card.
+
+**Instrumented in build `20260914-224755`.** A `DebugMark` sits before and
+after every network call in `dns_query` — `net_socket`, `net_sendto`,
+`net_select`, `net_recvfrom` — and each one is flushed to the card before it
+returns. The last line in the next log names the call that did not come back.
+If no `dns:` line appears at all, the freeze is before `net_socket` and the
+resolver is not the culprit.
+
+**Noted for later, from gcradio `DOC.md` §12.** `SO_RCVTIMEO` is an orphan
+define in libogc2: `network.h` declares it, its lwIP never implements it.
+`stream/tcp.c` sets it on every socket it opens and gets nothing. So **MPlayer's
+sockets have no timeout on this platform** — a peer that dies without FIN or
+RST leaves `net_recv()` blocked forever. `net_select()` is the only real
+timeout here. That is a separate defect from this freeze, it has not bitten
+yet because no connection has ever been made, and it will need fixing before
+web radio can survive a dropped stream.
