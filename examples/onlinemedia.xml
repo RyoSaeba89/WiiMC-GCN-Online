@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<file>
+  <!-- Adapted from RyoSaeba89/gcradio gcradio.conf, revision 35fc9b7. -->
+  <folder name="GCRadio - Nectarine">
+    <link name="[US] Nectarine Demoscene Radio" addr="http://necta.burn.net:8000/nectarine" type="audio" />
+    <link name="[EUR] Nectarine Demoscene Radio" addr="http://nectarine.from-de.com/necta192" type="audio" />
+  </folder>
+  <folder name="GCRadio - Synthwave">
+    <link name="NightRide FM (Opus)" addr="https://stream.nightride.fm/nightride.ogg" type="audio" />
+    <link name="Chillsynth (Opus)" addr="https://stream.nightride.fm/chillsynth.ogg" type="audio" />
+    <link name="Datawave (Opus)" addr="https://stream.nightride.fm/datawave.ogg" type="audio" />
+    <link name="Spacesynth (Opus)" addr="https://stream.nightride.fm/spacesynth.ogg" type="audio" />
+    <link name="Darksynth (Opus)" addr="https://stream.nightride.fm/darksynth.ogg" type="audio" />
+    <link name="Horrorsynth (Opus)" addr="https://stream.nightride.fm/horrorsynth.ogg" type="audio" />
+    <link name="Rekt - aggro synth (Opus)" addr="https://stream.nightride.fm/rekt.ogg" type="audio" />
+    <link name="EBSM - electro body (Opus)" addr="https://stream.nightride.fm/ebsm.ogg" type="audio" />
+    <link name="Synthetic FM 256k" addr="http://stream.syntheticfm.com:8040/live" type="audio" />
+    <link name="Synthwave (laut.fm)" addr="http://stream.laut.fm/synthwave" type="audio" />
+  </folder>
+  <folder name="GCRadio - Chiptune et jeux">
+    <link name="SLAY Radio - C64 remix" addr="http://relay3.slayradio.org:8000/" type="audio" />
+    <link name="Rainwave Chiptune" addr="http://relay.rainwave.cc/chiptune.mp3" type="audio" />
+    <link name="Rainwave OC ReMix" addr="http://relay.rainwave.cc/ocremix.mp3" type="audio" />
+    <link name="Game Music (laut.fm)" addr="http://stream.laut.fm/gamemusic" type="audio" />
+    <link name="Amiga (laut.fm)" addr="http://stream.laut.fm/amiga" type="audio" />
+  </folder>
+  <folder name="GCRadio - Metal">
+    <link name="Black Metal (laut.fm)" addr="http://stream.laut.fm/blackmetal" type="audio" />
+    <link name="Death Metal (laut.fm)" addr="http://stream.laut.fm/deathmetal" type="audio" />
+    <link name="Metal (laut.fm)" addr="http://stream.laut.fm/metal" type="audio" />
+    <link name="Metalcore (laut.fm)" addr="http://stream.laut.fm/metalcore" type="audio" />
+  </folder>
+  <folder name="GCRadio - Diagnostic HTTPS">
+    <link name="NightRide MP3 320" addr="https://stream.nightride.fm/nightride.mp3" type="audio" />
+    <link name="Darksynth MP3 320" addr="https://stream.nightride.fm/darksynth.mp3" type="audio" />
+    <link name="SomaFM Vaporwaves MP3 128" addr="https://ice1.somafm.com/vaporwaves-128-mp3" type="audio" />
+    <link name="SomaFM Vaporwaves AAC 128" addr="https://ice1.somafm.com/vaporwaves-128-aac" type="audio" />
+    <link name="SomaFM Vaporwaves AAC 64" addr="https://ice1.somafm.com/vaporwaves-64-aac" type="audio" />
+  </folder>
+</file>

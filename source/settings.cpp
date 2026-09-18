@@ -393,9 +393,9 @@ prepareSettingsData ()
 //	createXMLSetting("dvdDisabled", "DVD Disabled", toStr(WiiSettings.dvdDisabled));
 	//createXMLSetting("dvdSyncType", "DVD Sync Type", toStr(WiiSettings.dvdSyncType));
 	// Online Media
-//	createXMLSection("Online Media", "Online Media Settings");
-//	createXMLSetting("onlineCacheFill", "Online Cache Fill %", toStr(WiiSettings.onlineCacheFill));
-//	createXMLSetting("onlinemediaFolder", "Online media folder", WiiSettings.onlinemediaFolder);
+createXMLSection("Online Media", "Online Media Settings");
+createXMLSetting("onlineCacheFill", "Online Cache Fill %", toStr(WiiSettings.onlineCacheFill));
+createXMLSetting("onlinemediaFolder", "Online media folder", WiiSettings.onlinemediaFolder);
 //	createXMLSetting("yggdrasilQuality", "Yggdrasil Radio artsyle", toStr(WiiSettings.yggdrasilQuality));
 //	createXMLSetting("anisonfmQuality", "ANISON.FM artstyle", toStr(WiiSettings.anisonfmQuality));
 //	createXMLSetting("onlineBanners", "Online Screensaver", toStr(WiiSettings.onlineBanners));
@@ -610,7 +610,9 @@ static void RecurseOnlineMedia(mxml_node_t * top, char * path)
 		if(name) // this is a folder
 		{
 			char *newpath;
+			if(strlen(path) + strlen(name) + 2 > MAXPATHLEN) break;
 			newpath = (char*) malloc((MAXPATHLEN+1)*sizeof(char));
+			if(!newpath) break;
 			snprintf(newpath, MAXPATHLEN, "%s%s/", path, name);
 			RecurseOnlineMedia(next, newpath);
 			free(newpath);
@@ -632,7 +634,7 @@ static void LoadOnlineMediaFile(char * filepath)
 		return;
 
 	memset(savebuffer, 0, SAVEBUFFERSIZE);
-	offset = LoadFile(savebuffer, SAVEBUFFERSIZE, filepath, SILENT);
+	offset = LoadFile(savebuffer, SAVEBUFFERSIZE-1, filepath, SILENT);
 
 	if (offset > 0)
 	{
@@ -1356,8 +1358,8 @@ static bool LoadSettingsFile(char * filepath)
 			//	loadXMLSetting(&WiiSettings.dvdDisabled, "dvdDisabled");
 			//	loadXMLSetting(&WiiSettings.dvdSyncType, "dvdSyncType");
 				// Online Media
-			//	loadXMLSetting(&WiiSettings.onlineCacheFill, "onlineCacheFill");
-			//	loadXMLSetting(WiiSettings.onlinemediaFolder, "onlinemediaFolder", sizeof(WiiSettings.onlinemediaFolder));
+			loadXMLSetting(&WiiSettings.onlineCacheFill, "onlineCacheFill");
+			loadXMLSetting(WiiSettings.onlinemediaFolder, "onlinemediaFolder", sizeof(WiiSettings.onlinemediaFolder));
 			//	loadXMLSetting(&WiiSettings.yggdrasilQuality, "yggdrasilQuality");
 			//	loadXMLSetting(&WiiSettings.anisonfmQuality, "anisonfmQuality");
 			//	loadXMLSetting(&WiiSettings.onlineBanners, "onlineBanners");
@@ -1410,8 +1412,8 @@ bool LoadSettings()
 
 	sprintf(filepath, "%s/settings.xml", appPath);
 	settingsFound = LoadSettingsFile(filepath);
-	//sprintf(filepath, "%s/onlinemedia.xml", appPath);
-	//LoadOnlineMediaFile(filepath);
+	sprintf(filepath, "%s/onlinemedia.xml", appPath);
+	LoadOnlineMediaFile(filepath);
 
 	settingsLoaded = true; // attempted to load settings
 	if(settingsFound)

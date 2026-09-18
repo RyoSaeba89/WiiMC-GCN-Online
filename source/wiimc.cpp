@@ -88,6 +88,9 @@ bool ExitRequested = false;
 bool ShutdownRequested = false;
 int subtitleFontFound = 0;
 char appPath[1024] = { 0 };
+#include "utils/webdav_device.h"
+#include "utils/gc_tls.h"
+#include "utils/dns.h"
 char loadedFile[1024] = { 0 };
 char loadedDevice[16] = { 0 };
 char loadedFileDisplay[128] = { 0 };
@@ -99,7 +102,7 @@ int use_lavf = 0;
 
 // MPlayer threads
 #define MPLAYER_STACKSIZE (512*1024)
-#define CACHE_STACKSIZE (16*1024)
+#define CACHE_STACKSIZE (64*1024)
 static lwp_t mthread = LWP_THREAD_NULL;
 static lwp_t cthread = LWP_THREAD_NULL;
 static u8 cachestack[CACHE_STACKSIZE] ATTRIBUTE_ALIGN (32);
@@ -624,6 +627,10 @@ bool CacheThreadSuspended()
 	if(LWP_ThreadIsSuspended(cthread))
 		return true;
 	return false;
+}
+bool CacheThreadAvailable()
+{
+	return cthread != LWP_THREAD_NULL;
 }
 }
 /*
@@ -1286,6 +1293,11 @@ int main(int argc, char *argv[])
 	DebugLogAttachCard(); // needs sd1:, and flushes everything logged so far
 	DebugMark("boot: app path '%s'%s", appPath,
 		appPath[0] ? "" : " -- NOT FOUND, playback will refuse to start");
+	WebDAVInit(appPath);
+	dns_init();
+#ifdef WANT_TLS
+	gc_tls_init(appPath);
+#endif
 	
 	// Phase 1: bring the interface up in the background. if_config() blocks for
 	// seconds -- longer when no adapter answers and libogc2 walks all four
@@ -1332,7 +1344,11 @@ int main(int argc, char *argv[])
 
 	// mplayer cache thread
 	memset(cachestack,0,CACHE_STACKSIZE*sizeof(u8));
-	LWP_CreateThread(&cthread, mplayercachethread, NULL, cachestack, CACHE_STACKSIZE, 70);
+	/* The public LWP API uses HIGHER numbers for higher priority (1..127).
+	 * Keep cache I/O above MPlayer (68) and the GUI (60). Its stack must also
+	 * cover HTTP, DNS and TLS calls, not just the old local-file reader. */
+	if(LWP_CreateThread(&cthread, mplayercachethread, NULL, cachestack, CACHE_STACKSIZE, 70) != 0)
+		DebugMark("cache: unable to create worker");
 
 	usleep(200);
 

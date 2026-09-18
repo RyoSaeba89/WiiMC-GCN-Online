@@ -63,6 +63,9 @@ extern const stream_info_t stream_info_rtsp;
 extern const stream_info_t stream_info_rtp;
 extern const stream_info_t stream_info_udp;
 extern const stream_info_t stream_info_http1;
+#ifdef GEKKO
+extern const stream_info_t stream_info_gc_http;
+#endif
 extern const stream_info_t stream_info_http2;
 extern const stream_info_t stream_info_dvb;
 extern const stream_info_t stream_info_tv;
@@ -96,7 +99,11 @@ static const stream_info_t* const auto_open_streams[] = {
   #if !defined(GEKKO)
   &stream_info_netstream,
   #endif
+  #ifdef GEKKO
+  &stream_info_gc_http,
+  #else
   &stream_info_http1,
+  #endif
   #if !defined(GEKKO)
   /* asf_streaming.c is not in this tree; see source/mplayer/Makefile. */
   &stream_info_asf,
@@ -111,7 +118,9 @@ static const stream_info_t* const auto_open_streams[] = {
 #endif
   &stream_info_rtp,
   &stream_info_udp,
+  #ifndef GEKKO
   &stream_info_http2,
+  #endif
 #endif
 #ifdef CONFIG_DVBIN
   &stream_info_dvb,

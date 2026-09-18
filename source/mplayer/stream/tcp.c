@@ -56,21 +56,6 @@
 #if defined(GEKKO)
 #include <ogc/lwp_watchdog.h>
 
-/* The non-blocking flag libogc2's lwIP actually reads in net_fcntl(), and the
- * two wrong ones that are within reach here. Both fail silently.
- *
- *   IOS_O_NONBLOCK 0x04  - what this file used. It is the Wii/IOS value and
- *                          means nothing to the GameCube's lwIP.
- *   O_NONBLOCK    0x4000 - newlib's (sys/_default_fcntl.h:23,58). libogc2
- *                          defines 04000 but only "#ifndef O_NONBLOCK"
- *                          (network.h:154), and <fcntl.h> is included above,
- *                          so newlib wins wherever the name is written.
- *
- * With the wrong bit the socket stays blocking, net_connect() does not return
- * until the TCP stack gives up, and the 8-second escape below -- which is
- * tested only after net_connect() returns -- is unreachable. That is the
- * freeze of PORTING.md 11.18. */
-#define LWIP_O_NONBLOCK				04000U
 #endif
 
 /* IPv6 options */
@@ -132,7 +117,7 @@ connect2Server_with_af(char *host, int port, int af,int verb) {
 	socket_server_fd = socket(af, SOCK_STREAM, 0);
 
 
-	if( socket_server_fd==-1 ) {
+	if( socket_server_fd<0 ) {
 //		mp_msg(MSGT_NETWORK,MSGL_ERR,"Failed to create %s socket:\n", af2String(af));
 		return TCP_ERROR_FATAL;
 	}
@@ -179,6 +164,7 @@ connect2Server_with_af(char *host, int port, int af,int verb) {
 #endif
 		if( hp==NULL ) {
 			if(verb) mp_msg(MSGT_NETWORK,MSGL_ERR,MSGTR_MPDEMUX_NW_CantResolv, af2String(af), host);
+			closesocket(socket_server_fd);
 			return TCP_ERROR_FATAL;
 		}
 
@@ -224,16 +210,19 @@ connect2Server_with_af(char *host, int port, int af,int verb) {
 
 	{
 	u64 t1,t2;
-	int flags;
+	unsigned long nonblock = 1;
 
-	flags = net_fcntl(socket_server_fd, F_GETFL, 0);
-	net_fcntl(socket_server_fd, F_SETFL, flags | LWIP_O_NONBLOCK);
-	MPlayerNetMark("nonblock flags", net_fcntl(socket_server_fd, F_GETFL, 0));
+	ret = net_ioctl(socket_server_fd, FIONBIO, &nonblock);
+    MPlayerNetMark("FIONBIO", ret);
+    if(ret < 0) { closesocket(socket_server_fd); return TCP_ERROR_FATAL; }
+    MPlayerNetMark("nonblock flags", net_fcntl(socket_server_fd, F_GETFL, 0));
 
-	t1=ticks_to_millisecs(gettime());
+    t1=ticks_to_millisecs(gettime());
 	do {
 		ret = net_connect(socket_server_fd,(struct sockaddr*)&server_address,server_address_size);
-		if(ret == -EISCONN) break;
+		if(ret == 0 || ret == -EISCONN) break;
+        if(ret != -EINPROGRESS && ret != -EALREADY && ret != -EAGAIN) break;
+        if(stream_check_interrupt(0)) break;
 		t2=ticks_to_millisecs(gettime());
 		if(t2-t1 > 8000) break; // 8 secs to try to connect
 		/* 20 ms, not the 500 us this used to poll at. On a non-blocking
@@ -247,12 +236,13 @@ connect2Server_with_af(char *host, int port, int af,int verb) {
 
 	MPlayerNetMark("connect", ret);
 
-	if(ret != -EISCONN)
+	if(ret != 0 && ret != -EISCONN)
 	{		
 		closesocket(socket_server_fd);
 		return TCP_ERROR_PORT;
 	}
-	net_fcntl(socket_server_fd, F_SETFL, net_fcntl(socket_server_fd, F_GETFL, 0) & ~LWIP_O_NONBLOCK);
+	nonblock = 0;
+    if(net_ioctl(socket_server_fd, FIONBIO, &nonblock) < 0) { closesocket(socket_server_fd); return TCP_ERROR_FATAL; }
 	}
 #elif !HAVE_WINSOCK2_H
 	fcntl( socket_server_fd, F_SETFL, fcntl(socket_server_fd, F_GETFL) | O_NONBLOCK );

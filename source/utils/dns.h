@@ -21,6 +21,7 @@ u32  dns_get_server(void);
 
 /* "192.168.1.20" or "radio.example.net" -> address in network byte order.
  * Returns 0 on success, -1 otherwise. */
+void dns_init(void);
 int  dns_resolve(const char *host, u32 *ip);
 
 /* Flushes the cache. Call it whenever a connection fails: this is what makes

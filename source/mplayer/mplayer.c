@@ -94,6 +94,7 @@ char MPLAYER_LIBDIR[100];
 #include "sub/sub.h"
 #include "libvo/video_out.h"
 #include "stream/cache2.h"
+#include "../utils/playback_buffer.h"
 #include "stream/stream.h"
 #include "stream/stream_bd.h"
 #include "stream/stream_dvdnav.h"
@@ -166,7 +167,7 @@ bool http_block = false;
 bool halve_fps = true;
 
 extern int prev_dxs, prev_dys;
-extern int stop_cache_thread;
+extern volatile int stop_cache_thread;
 
 int monospaced = 0;
 int alt_font = 0;
@@ -182,6 +183,8 @@ bool WakeupUSB();
 void ResumeCacheThread();
 bool CacheThreadSuspended();
 bool DisableVideoImg();
+void MPlayerNetworkError(const char *);
+void WebDAVPlaybackCacheReady(void);
 
 void reinit_video();
 void reinit_audio();
@@ -346,6 +349,7 @@ int stream_cache_size=-1;
 #ifdef CONFIG_STREAM_CACHE
 float stream_cache_min_percent      = 20.0;
 float stream_cache_seek_min_percent = 50.0;
+static float stream_cache_low_percent = 6.0;
 #endif
 
 // dump:
@@ -2960,7 +2964,8 @@ static void pause_loop(void)
 		cmd = mp_input_get_cmd(0,1,0); //execute the command
 		run_command(mpctx, cmd);
 		mp_cmd_free(cmd);
-		DrawMPlayer(); //copy screen
+		if (mpctx->sh_video && mpctx->video_out && vo_config_count)
+			DrawMPlayer(); //copy screen
 		pause_gui=0; 
 		PauseAndGotoGUI();
   }
@@ -3789,10 +3794,27 @@ audio_delay=0;
 
     current_module = "open_stream";
 #ifdef GEKKO
+  stream_cache_low_percent = 6.0;
   if(strncmp(filename,"dvdnav:",7) == 0)
   	stream_cache_size=-1;
+  else if(!strncmp(filename,"http://",7) || !strncmp(filename,"https://",8)) {
+    stream_cache_size=256; // KiB: about 16 seconds at 128 kbps
+    stream_cache_min_percent=online_stream_cache_min_percent;
+    stream_cache_seek_min_percent=0;
+  }
+  else if(!strncmp(filename,"dav1:",5)) {
+    /* Probe with a small prefix; end-tag seeks can discard this data.
+     * After decoder setup, prefill about three seconds at the audio bitrate. */
+    stream_cache_size=DAV_AUDIO_CACHE_BYTES / 1024;
+    stream_cache_min_percent=100.0 * DAV_AUDIO_PROBE_BYTES / DAV_AUDIO_CACHE_BYTES;
+    stream_cache_seek_min_percent=0;
+  }
   else
-  	stream_cache_size=orig_stream_cache_size;
+  {
+    stream_cache_size=orig_stream_cache_size;
+    stream_cache_min_percent=orig_stream_cache_min_percent;
+    stream_cache_seek_min_percent=orig_stream_cache_seek_min_percent;
+  }
 #endif
     mpctx->stream  = open_stream(filename, 0, &mpctx->file_format);
     if (!mpctx->stream) { // error...
@@ -3906,11 +3928,26 @@ goto_enable_cache:
         int res;
         current_module = "enable_cache";
 #ifdef GEKKO
-stream_cache_min_percent=0.2;
+        if(strncmp(filename,"dav1:",5) != 0)
+            stream_cache_min_percent=0.2;
 #endif
         res = stream_enable_cache(mpctx->stream, stream_cache_size * 1024,
                                   stream_cache_size * 1024 * (stream_cache_min_percent / 100.0),
                                   stream_cache_size * 1024 * (stream_cache_seek_min_percent / 100.0));
+#ifdef GEKKO
+        if(!strncmp(filename,"dav1:",5)) {
+            if(res < 0) {
+                MPlayerNetworkError("Unable to fill the WebDAV audio buffer");
+                mpctx->eof = PT_STOP;
+                goto goto_next_file;
+            }
+            if(res == 0) {
+                mpctx->eof = libmpdemux_was_interrupted(PT_NEXT_ENTRY);
+                if(!mpctx->eof) mpctx->eof = PT_STOP;
+                goto goto_next_file;
+            }
+        }
+#endif
         if (res == 0)
             if ((mpctx->eof = libmpdemux_was_interrupted(PT_NEXT_ENTRY)))
                 goto goto_next_file;
@@ -4232,6 +4269,30 @@ stream_cache_min_percent=0.2;
             if (mpctx->sh_audio && mpctx->sh_audio->codec)
                 mp_msg(MSGT_IDENTIFY, MSGL_INFO, "ID_AUDIO_CODEC=%s\n", mpctx->sh_audio->codec->name);
         }
+
+#ifdef GEKKO
+        if (mpctx->sh_audio && !strncmp(filename, "dav1:", 5)) {
+            int target = dav_audio_start_bytes(mpctx->sh_audio->i_bps);
+            int res;
+            stream_cache_min_percent = 100.0 * target / DAV_AUDIO_CACHE_BYTES;
+            /* Refill at roughly one second remaining; resume at three.
+             * A fixed percentage would pause low-bitrate tracks at startup. */
+            stream_cache_low_percent = stream_cache_min_percent / 3.0;
+            current_module = "audio_prefill";
+            mp_msg(MSGT_CPLAYER, MSGL_INFO,
+                "WebDAV audio prefill: %d bytes, bitrate %d B/s, cache %d KiB\n",
+                target, mpctx->sh_audio->i_bps, DAV_AUDIO_CACHE_BYTES / 1024);
+            res = stream_cache_prefill(mpctx->stream, target);
+            if (res <= 0) {
+                if (res < 0)
+                    MPlayerNetworkError("Unable to fill the WebDAV audio buffer");
+                mpctx->eof = libmpdemux_was_interrupted(PT_NEXT_ENTRY);
+                if (!mpctx->eof) mpctx->eof = PT_STOP;
+                goto goto_next_file;
+            }
+            WebDAVPlaybackCacheReady();
+        }
+#endif
 
         current_module = "av_init";
 
@@ -4606,7 +4667,7 @@ total_time_usage_start=GetTimer();
 
 #ifdef GEKKO
 	//low cache
-	if (mpctx->osd_function != OSD_PAUSE && stream_cache_size > 0.0 && stream_cache_min_percent> 1.0 && cache_fill_status<6.0 && cache_fill_status>=0.0)
+	if (mpctx->osd_function != OSD_PAUSE && stream_cache_size > 0.0 && stream_cache_min_percent> 1.0 && cache_fill_status<stream_cache_low_percent && cache_fill_status>=0.0)
 	{
 		pause_low_cache=1;
 		mpctx->osd_function = OSD_PAUSE;
@@ -4871,7 +4932,9 @@ sync_interlace = 0;
   //   VIDEO_SetBlack(TRUE);
 DisableVideoImg();
 save_restore_point(fileplaying, partitionlabelplaying);
-end_film_error=stream_error(mpctx->stream);
+// An open/decoder failure must return control to the GUI. stream_error(NULL)
+// returns zero, which otherwise makes FindNextFile retry the same URL forever.
+end_film_error=(!mpctx->stream || (!mpctx->sh_audio && !mpctx->sh_video)) ? 1 : stream_error(mpctx->stream);
 printf("mplayer: end film. UNINIT. err: %i\n",stream_error(mpctx->stream));
 
 uninit_player(INITIALIZED_ALL);
@@ -5279,6 +5342,10 @@ static void low_cache_loop(void)
 	else
 		percent=stream_cache_min_percent;
 
+	mp_msg(MSGT_CPLAYER, MSGL_INFO,
+		"cache: rebuffering %s at %.1f%% (target %.1f%%)\n",
+		mpctx->sh_video ? "video" : "audio", cache_fill_status, percent);
+
 	while ( (cmd = mp_input_get_cmd(0, 0, 1)) == NULL || cmd->pausing == 4)
 	{
 		if(cache_fill_status >= percent || cache_fill_status<0) break;
@@ -5298,17 +5365,31 @@ static void low_cache_loop(void)
 
 		progress = (int)(cache_fill_status*100.0/percent);
 
-		if(progress >= 100 || progress <= 0)
-			break; // let's get out of here!
+		if(progress >= 100)
+			break;
+		/* Zero means empty, not ready. Keep yielding to the producer. */
+		if(progress < 1) progress = 1;
 
 		SetBufferingStatus(progress);
 
 		if (mpctx->sh_video && mpctx->video_out && vo_config_count)
+		{
 			mpctx->video_out->check_events();
-
-		DrawMPlayer();
-		usleep(100);
+			DrawMPlayer();
+			usleep(100);
+		}
+		else
+		{
+			/* Audio playback leaves GX to GuiThread. Drawing here races
+			 * Menu_Render and can strand both threads in GX draw-done.
+			 * Yield just as pause_loop does while the cache refills. */
+			usec_sleep(20000);
+		}
 	}
+
+	mp_msg(MSGT_CPLAYER, MSGL_INFO,
+		"cache: rebuffer wait ended at %.1f%% (gui %d)\n",
+		cache_fill_status, controlledbygui);
 
 	mpctx->osd_function=OSD_PLAY;
 	SetBufferingStatus(0);

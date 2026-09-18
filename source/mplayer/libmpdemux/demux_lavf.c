@@ -216,6 +216,9 @@ static int lavf_check_file(demuxer_t *demuxer){
  * enough to be able to decide that a fix is not reasonable.
  */
 static const char * const preferred_list[] = {
+    /* Native AAC is disabled in this port. Accept ADTS here before the
+     * MPEG video probes consume minutes of a low-bitrate live radio. */
+    "aac",
     "cdxl",
     "dxa",
     "flv",

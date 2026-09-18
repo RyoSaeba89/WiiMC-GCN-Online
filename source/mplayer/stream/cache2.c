@@ -60,10 +60,12 @@ static void *ThreadProc(void *s);
 //static unsigned char *global_buffer=NULL;
 static void *cachearg = NULL;
 static mutex_t cache_mutex = LWP_MUTEX_NULL;
-int stop_cache_thread = 1;
+volatile int stop_cache_thread = 1;
 extern void SuspendCacheThread();
 extern void ResumeCacheThread();
 extern bool CacheThreadSuspended();
+extern bool CacheThreadAvailable();
+extern int controlledbygui;
 extern void CheckMplayerNetwork();
 extern void ShowProgress (const char *msg, int done, int total);
 #else
@@ -101,12 +103,12 @@ typedef struct {
   pid_t ppid; // parent PID to detect killed parent
 #endif
   // filler's pointers:
-  int eof;
-  off_t min_filepos; // buffer contain only a part of the file, from min-max pos
-  off_t max_filepos;
+  volatile int eof;
+  volatile off_t min_filepos; // shared with the reader on the single-core GC
+  volatile off_t max_filepos;
   off_t offset;      // filepos <-> bufferpos  offset value (filepos of the buffer's first byte)
   // reader's pointers:
-  off_t read_filepos;
+  volatile off_t read_filepos;
   // commands/locking:
 //  int seek_lock;   // 1 if we will seek/reset buffer, 2 if we are ready for cmd
 //  int fifo_flag;  // 1 if we should use FIFO to notice cache about buffer reads.
@@ -125,7 +127,12 @@ typedef struct {
 #endif
 } cache_vars_t;
 
-float cache_fill_status=0;
+volatile float cache_fill_status=0;
+
+float MPlayerCacheFillPercent(void)
+{
+  return cache_fill_status;
+}
 
 static void cache_flush(cache_vars_t *s)
 {
@@ -141,25 +148,23 @@ extern int cntReconnect;
 static int cache_read(cache_vars_t *s, unsigned char *buf, int size)
 {
   int total=0;
+  u64 last_progress = GetTimerMS();
   
   while(size>0 ){
     int pos,newb,len;
 
-	if(getMESS != 0) { //this loop is significant but not all there is to the bug
-		//getWeird = size; //2048
-		return 0;
-	}
-	if(getWeird > 80) { //assume no longer playing audio
-		getWeird = 0;
-		getMESS = 1; //forces 3 loops to exit, allowing mplayer to still work
-	}
-	++getWeird;
+	if(getMESS != 0 || controlledbygui == 2 || stop_cache_thread)
+		return total;
 	
   //printf("CACHE2_READ: 0x%X <= 0x%X <= 0x%X  \n",s->min_filepos,s->read_filepos,s->max_filepos);
 
     if(s->read_filepos>=s->max_filepos || s->read_filepos<s->min_filepos){
 	// eof?
 	if(s->eof) break;
+	if(GetTimerMS() - last_progress >= 30000) {
+	    mp_msg(MSGT_CACHE, MSGL_ERR, "cache: no data for 30 seconds\n");
+	    return total;
+	}
 
 	// waiting for buffer fill...
 	usec_sleep(READ_USLEEP_TIME); // 10ms
@@ -203,15 +208,15 @@ static int cache_read(cache_vars_t *s, unsigned char *buf, int size)
     s->read_filepos+=len;
     size-=len;
     total+=len;
+    last_progress = GetTimerMS();
 
   }
   
   //reset
   getWeird = 0;
   
-#ifndef GEKKO
-  cache_fill_status=(s->max_filepos-s->read_filepos)/(s->buffer_size / 100);
-#endif
+  cache_fill_status=s->eof ? -1 :
+      (s->max_filepos-s->read_filepos)*100.0/s->buffer_size;
   return total;
 }
 
@@ -465,6 +470,7 @@ static cache_vars_t* cache_init(int size,int sector){
   }//32kb min_size
   s->buffer_size=num*sector;
   s->sector_size=sector;
+  s->control=-1;
   printf("s->buffer_size: %i  sector: %i\n",s->buffer_size,sector);
 #if !defined(__MINGW32__) && !defined(PTHREAD_CACHE) && !defined(__OS2__) && !defined(GEKKO)
   s->buffer=shmem_alloc(s->buffer_size);
@@ -475,9 +481,11 @@ static cache_vars_t* cache_init(int size,int sector){
 
   if((u32)s->buffer < AR_GetBaseAddress()){
 #else
- // if(global_buffer==NULL) global_buffer=(unsigned char *)0x90002000;
- // s->buffer=global_buffer;
-  
+  /* The fixed/global GameCube cache buffer used by the original port was
+   * removed, but its replacement allocation was left commented out.  The
+   * result was that every cache_init() failed and playback continued without
+   * a cache.  Use an aligned heap block so the requested size is real. */
+  s->buffer=memalign(32, s->buffer_size);
   if(s->buffer == NULL){
 #endif
 #endif
@@ -506,27 +514,16 @@ void cache_uninit(stream_t *s) {
   cache_vars_t* c = s->cache_data;
   
 #if defined(GEKKO)
-  if(!s->cache_pid) return; 
-  if(!CacheThreadSuspended())
+  if(s->cache_pid && CacheThreadAvailable())
   {
-    cache_do_control(s, -2, NULL);
+    /* Cancel network I/O before waiting. Never free the shared stream while
+     * the worker is still running, even if the GUI requested another track. */
     stop_cache_thread = 1;
-    while(!CacheThreadSuspended()) {
-  	  usleep(50);
-	  if(getMESS != 0) { //significant loop
-		//if(getWeird == 8)
-			//getWeird = 9;
-		getMESS = 0;
-		waitReload = 1; //this flag allows a reload after some time has passed to reconnect stream
-		++cntReconnect;
-		//s->eof = 1; //does not make a diff
-		return;
-		//break; //frequent dsi crash
-	  }
-	}
+    while(!CacheThreadSuspended()) usleep(1000);
   }
   s->cache_pid = 0;
   cachearg = NULL;
+  cache_fill_status = -1;
 #ifdef USE_ARAM
   free(gekko_stack);
   gekko_stack = NULL;
@@ -547,14 +544,16 @@ if(!c) return;
 #if defined(GEKKO)
   if(c->stream)
     free(c->stream);
-  
+
 #ifdef USE_ARAM
   free(c->arq_read_buffer);
   c->arq_read_buffer = NULL;
   free(c->arq_fill_buffer);
   c->arq_fill_buffer = NULL;
+#else
+  free(c->buffer);
 #endif
-  
+
   c->buffer=NULL;
   free(s->cache_data);
   s->cache_data=NULL;
@@ -581,6 +580,44 @@ static void exit_sighandler(int x){
   exit(0);
 }
 
+int stream_cache_prefill(stream_t *stream, int min)
+{
+    cache_vars_t *s = stream->cache_data;
+    if (!s) return -1;
+    /* A second prefill can follow probing/seeking. Leave room for retained
+     * history and the producer's minimum write size, or it cannot finish. */
+    int forward_limit = s->buffer_size - s->back_size - s->fill_limit;
+    if (min > forward_limit) min = forward_limit;
+
+    u64 last_progress = GetTimerMS();
+    off_t last_position = s->max_filepos;
+    while (s->read_filepos < s->min_filepos ||
+           s->max_filepos - s->read_filepos < min) {
+        if (getMESS || controlledbygui == 2 || stream_check_interrupt(0))
+            return 0;
+        if (s->eof) break; // short file: play the remaining bytes
+#ifdef GEKKO
+        if (cntReconnect == 0) {
+            off_t available = s->max_filepos - s->read_filepos;
+            ShowProgress("Buffering...", available > 0 ? (int)available : 0, min);
+        }
+#endif
+        if (s->max_filepos != last_position) {
+            last_position = s->max_filepos;
+            last_progress = GetTimerMS();
+        } else if (GetTimerMS() - last_progress >= 30000) {
+            mp_msg(MSGT_CACHE, MSGL_ERR, "cache: prefill stalled for 30 seconds\n");
+            return -1;
+        }
+        /* Yield even when input callbacks return immediately. */
+        usec_sleep(20000);
+    }
+    if (getMESS || controlledbygui == 2) return 0;
+    if (s->eof && s->max_filepos == s->read_filepos && s->stream->error)
+        return -1;
+    return 1;
+}
+
 /**
  * \return 1 on success, 0 if the function was interrupted and -1 on error
  */
@@ -590,6 +627,7 @@ int stream_enable_cache(stream_t *stream,int size,int min,int seek_limit){
   cache_vars_t* s;
 #ifdef GEKKO
   cache_fill_status=-1;
+  if(!CacheThreadAvailable()) return -1;
 #endif
   if (stream->flags & STREAM_NON_CACHEABLE) {
     //mp_msg(MSGT_CACHE,MSGL_STATUS,"\rThis stream is non-cacheable\n");
@@ -602,10 +640,11 @@ int stream_enable_cache(stream_t *stream,int size,int min,int seek_limit){
   s=cache_init(size,ss);
   if(s == NULL) return -1;
   stream->cache_data=s;
-  s->stream=stream; // callback
+  s->stream=NULL; // owns a shallow copy, never the caller's stream
   s->seek_limit=seek_limit;
-  s->stream->error=0;
-  s->read_filepos=0;
+  stream->error=0;
+  s->read_filepos=stream->pos;
+  s->min_filepos=s->max_filepos=s->offset=s->read_filepos;
 
   //make sure that we won't wait from cache_fill
   //more data than it is allowed to fill
@@ -617,13 +656,15 @@ int stream_enable_cache(stream_t *stream,int size,int min,int seek_limit){
   }
 
 #if FORKED_CACHE
+  s->stream=stream;
   if((stream->cache_pid=fork())){
     if ((pid_t)stream->cache_pid == -1)
       stream->cache_pid = 0;
 #else
   {
     stream_t* stream2=malloc(sizeof(stream_t));
-    memcpy(stream2,s->stream,sizeof(stream_t));
+    if(!stream2) goto err_out;
+    memcpy(stream2,stream,sizeof(stream_t));
     s->stream=stream2;    
 #if defined(__MINGW32__)
     stream->cache_pid = _beginthread( ThreadProc, 0, s );
@@ -640,8 +681,8 @@ int stream_enable_cache(stream_t *stream,int size,int min,int seek_limit){
 	}
 	cachearg = s;
 	stop_cache_thread = 0;
-	ResumeCacheThread();
 	stream->cache_pid = 1;
+	ResumeCacheThread();
 	
 #ifdef USE_ARAM
 	s->arq_read_buffer = (void*)memalign(32, ss > STREAM_MAX_SECTOR_SIZE ? STREAM_MAX_SECTOR_SIZE : ss);
@@ -670,27 +711,8 @@ int stream_enable_cache(stream_t *stream,int size,int min,int seek_limit){
     mp_msg(MSGT_CACHE,MSGL_V,"CACHE_PRE_INIT: %"PRId64" [%"PRId64"] %"PRId64"  pre:%d  eof:%d  \n",
 	(int64_t)s->min_filepos,(int64_t)s->read_filepos,(int64_t)s->max_filepos,min,s->eof);
 
-    while(s->read_filepos<s->min_filepos || s->max_filepos-s->read_filepos<min){
-	mp_msg(MSGT_CACHE,MSGL_STATUS,MSGTR_CacheFill,
-	    100.0*(float)(s->max_filepos-s->read_filepos)/(float)(s->buffer_size),
-	    (int64_t)s->max_filepos-s->read_filepos
-	);
-
-	//if(getMESS != 0) {
-		//getWeird = 8;
-		//return -1; //it's unlikely but let's assume in case of edgecases
-	//}
-	
-#ifdef GEKKO
-	if(s->stream->type == STREAMTYPE_STREAM && cntReconnect == 0)
-		ShowProgress("Buffering...", (int)(100.0*(float)(s->max_filepos)/(float)(min)), 100);
-#endif
-	if(s->eof) break; // file is smaller than prefill size
-	if(stream_check_interrupt(PREFILL_SLEEP_TIME)) {
-	  res = 0;
-	  goto err_out;
-        }
-    }
+    res = stream_cache_prefill(stream, min);
+    if (res <= 0) goto err_out;
 
     mp_msg(MSGT_CACHE,MSGL_STATUS,"\n");
     return 1; // parent exits

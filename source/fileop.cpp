@@ -1113,12 +1113,19 @@ bool WakeupUSB()
 }
 }
 
+#include "utils/webdav_device.h"
 bool FindDevice(char * filepath, int * device, int * devnum)
 {
 	if(!filepath || filepath[0] == 0)
 		return false;
 
 	int tmp = -1;
+	if(strncmp(filepath, "dav1:", 5) == 0)
+	{
+		if(device) *device = DEVICE_WEBDAV;
+		if(devnum) *devnum = 1;
+		return true;
+	}
 
 	if(IsAllowedProtocol(filepath))
 	{
@@ -1179,7 +1186,7 @@ bool IsDeviceRoot(char * path)
 		(strncmp(path, "usb", 3) == 0 && pathlen == 6) ||
 		strcmp(path, "dvd:/") == 0 ||
 		(strncmp(path, "smb", 3) == 0 && pathlen == 6) ||
-		(strncmp(path, "ftp", 3) == 0 && pathlen == 6))
+		(strncmp(path, "ftp", 3) == 0 && pathlen == 6) || strcmp(path, "dav1:/") == 0)
 	{
 		return true;
 	}
@@ -1401,9 +1408,12 @@ bool ChangeInterface(int device, int devnum, bool silent)
 	//	case DEVICE_FTP:
 	//		mounted = ConnectFTP(devnum, silent);
 	//		break;
-	//	case DEVICE_INTERNET:
-	//		mounted = InitializeNetwork(silent);
-	//		break;
+		case DEVICE_INTERNET:
+			mounted = InitializeNetwork(silent);
+			break;
+		case DEVICE_WEBDAV:
+			mounted = WebDAVConfigured() && InitializeNetwork(silent);
+			break;
 	}
 
 	return mounted;
@@ -2585,9 +2595,8 @@ nomemParsePlaylistFile:
  ***************************************************************************/
 int ParseOnlineMedia()
 {
-//	if(browserOnlineMedia.first == NULL)
+	if(browserOnlineMedia.first == NULL)
 		return 0;
-#if 0
 	BROWSERENTRY *f_entry, *om_entry;
 
 	if(browser.dir[0] != 0)
@@ -2649,8 +2658,8 @@ int ParseOnlineMedia()
 			else // protocol not specified - assume http:// and append
 				snprintf(tmpurl, MAXPATHLEN, "http://%s", om_entry->url);
 
-			url_unescape_string(tmpurl2, tmpurl);
-			f_entry->file = strdup(tmpurl2);
+			// Preserve percent escapes: decoding %26 or %2F changes the URL.
+			f_entry->file = strdup(tmpurl);
 			if(f_entry->file == NULL) //no mem
 			{
 				DeleteEntryFiles(f_entry);
@@ -2747,7 +2756,6 @@ int ParseOnlineMedia()
 
 	UpdateBrowser();
 	return browser.numEntries;
-#endif
 }
 
 static bool cancelFileLoad = false;

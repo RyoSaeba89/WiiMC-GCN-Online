@@ -40,6 +40,7 @@ ENABLE_3DS                    = 0
 # ETH2GC is built around. It has to be linked ahead of -logc, so it goes in
 # NETLIBS rather than being appended like the toggles below.
 ENABLE_NETWORK                = 1
+ENABLE_TLS                    = 1
 
 # Log file, crash report and hang diagnostics on sd1:/wiimc.log.
 # See source/utils/debuglog.c and PORTING.md section 11.
@@ -58,10 +59,14 @@ ifeq ($(ENABLE_NETWORK), 1)
 CFLAGS += -DWANT_NETWORK
 NETLIBS := -lbba
 endif
+ifeq ($(ENABLE_TLS), 1)
+CFLAGS += -DWANT_TLS -DMBEDTLS_CONFIG_FILE=\"mbedtls_config.h\"
+TLSLIBS := -lmbedtls -lmbedx509 -lmbedcrypto
+endif
 
-LIBS    := -lmplayerwii -lavformat -lavcodec -lswscale -lavutil \
+LIBS    := -lmplayerwii -lavformat -lavcodec -lswscale -lavutil -lopus \
                         -ljpeg -liconv -lpng -lz \
-                        -lfat $(NETLIBS) -logc -lfreetype -lmxml -lexif \
+                        -lfat $(TLSLIBS) $(NETLIBS) -logc -lfreetype -lmxml -lexif \
                         -lbrotlidec -lbrotlicommon -lbz2
 
 ifeq ($(ENABLE_NTFS), 1)
@@ -106,6 +111,9 @@ endif
 # include and lib
 #---------------------------------------------------------------------------------
 LIBDIRS	:= $(PORTLIBS)
+ifeq ($(ENABLE_TLS), 1)
+LIBDIRS += $(MPLAYER)/../../vendor/prefix
+endif
 
 
 #---------------------------------------------------------------------------------
@@ -185,7 +193,7 @@ export BUILD_ID	?=	$(shell date +%Y%m%d-%H%M%S)
 DEPLOY_KEEP		:=	8
 
 $(BUILD):
-	cd source/mplayer; $(MAKE) -f Makefile; cd ../..
+	$(MAKE) -C source/mplayer -f Makefile
 	@[ -d $@ ] || mkdir -p $@
 	@rm -f $(BUILD)/debuglog.o
 	@make --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile.gc
@@ -252,6 +260,11 @@ DEPENDS	:=	$(OFILES:.o=.d)
 #---------------------------------------------------------------------------------
 $(OUTPUT).dol: $(OUTPUT).elf
 $(OUTPUT).elf: $(OFILES)
+ifeq ($(ENABLE_TLS), 1)
+$(OUTPUT).elf: $(CURDIR)/../vendor/prefix/lib/libmbedtls.a \
+               $(CURDIR)/../vendor/prefix/lib/libmbedx509.a \
+               $(CURDIR)/../vendor/prefix/lib/libmbedcrypto.a
+endif
 
 #---------------------------------------------------------------------------------
 # This rule links in binary data with .ttf, .lang, .png, and .jpg extensions

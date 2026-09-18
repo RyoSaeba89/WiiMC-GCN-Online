@@ -1,5 +1,11 @@
 # WiiMC-GCN-Online — porting notes
 
+**Release status, 2026-09-18:** 1.0.0 uses build `20260918-134405`, accepted
+on the maintainer's GameCube after the Opus, SomaFM AAC 64 and WebDAV fixes.
+The sections below preserve the development investigation; references to
+unfinished work describe that earlier stage. See [CHANGELOG.md](CHANGELOG.md)
+and section 11.24 for the released state.
+
 This fork adds two things to [SuperrSonic/WiiMC-GCN](https://github.com/SuperrSonic/WiiMC-GCN):
 **WebDAV** as a browsable network device, and **web radio** playback over HTTP
 and HTTPS. Both need something the upstream tree does not have — a working
@@ -1725,3 +1731,129 @@ hundred milliseconds. Anything else, and the number says which. After that the
 console reaches `http_send_request()`, and everything past it — the server's
 response, `scast_streaming_start` and the ICY de-interleaving — is code that
 has still never run.
+
+### 11.19 The first complete online run (2026-09-16)
+
+Build `20260916-213940`, log `logs/sd-11D853FD3405-wiimc.log`, is the first run
+that exercises radio, WebDAV browsing and WebDAV MP3 playback together. DHCP
+completed at 10.820 s with `192.168.68.56`. The GUI had already entered its
+first menu at 0.731 s, which is why the boot gate described below is required.
+
+The WebDAV root contained 629 entries. Its first listing took 1526 ms; two
+reloads during MP3 playback took 1752 and 2576 ms. Small folders took 52–163
+ms. Playback used socket 0 and directory metadata socket 1, so the interruption
+was not caused by one request replacing another. The extra PROPFIND traffic,
+XML allocation/parsing and browser rebuild ran concurrently with an audio path
+that did not have the cache it claimed to have.
+
+The same run proved that the CA bundle and host routing reached TLS, but all
+HTTPS streams ended in `TLS certificate rejected`. External TLS 1.2 probes
+using the exact SD `ca.pem` subsequently verified both the SomaFM and NightRide
+chains and host names. The bundle, cipher families and public servers were not
+the fault.
+
+### 11.20 Why GCRadio accepted HTTPS with a reset clock
+
+This was not an obsolete HTTPS/TLS protocol. GCRadio uses TLS 1.2 and mbedTLS
+2.28.8; this tree uses TLS 1.2 and mbedTLS 3.6.7. The decisive configuration
+difference is that GCRadio defines `MBEDTLS_HAVE_TIME` but does **not** define
+`MBEDTLS_HAVE_TIME_DATE`. Consequently the calendar-validity blocks in
+`x509_crt.c` are not compiled at all. GCRadio still checks the chain,
+signatures and requested host name.
+
+This tree initially compiled `MBEDTLS_HAVE_TIME_DATE` and attempted to clear
+`EXPIRED`/`FUTURE` flags in a verification callback. That was needlessly more
+complex and did not reproduce the effective GCRadio binary. The final
+configuration omits `MBEDTLS_HAVE_TIME_DATE` and rebuilds every mbedTLS object
+after a project configuration change. The linked ELF contains no
+`mbedtls_x509_time_gmtime` symbol. Verification failures log their hexadecimal
+flags; success logs that CA and host name passed while dates were disabled.
+
+Security consequence: an expired or not-yet-valid certificate can be accepted
+on this clockless console. A wrong CA, signature or host name is still fatal.
+
+### 11.21 The advertised MPlayer cache did not exist
+
+The line `s->buffer_size: 1048576 sector: 2048` in the hardware log looked as
+though a 1 MiB cache had been allocated. Inspection of `cache_init()` found the
+GameCube allocation itself commented out. `s` was zeroed, `s->buffer` remained
+NULL, and `stream_enable_cache()` returned `-1`; the caller ignored `-1` and
+continued without caching. This explains why a two-second directory operation
+could interrupt an MP3 even though a nominal 1 MiB buffer should have covered
+tens of seconds.
+
+The current design keeps audio ahead of browsing while limiting startup work:
+
+1. GameCube cache storage is allocated with 32-byte alignment and released at
+   teardown. The current WebDAV track requests 512 KiB and playback aborts with an explicit
+   error if that allocation fails.
+2. WebDAV initially reads 16 KiB for probing, then preloads about three seconds
+   at the detected audio bitrate after tag seeks (48,000 bytes at 128 kbit/s,
+   120,000 at 320 kbit/s). The ring fills further during playback. This replaced
+   the original 2 MiB/50% policy at the user's request on 2026-09-18.
+3. The cache producer LWP runs at priority 70, above MPlayer's priority 68 and
+   the GUI's priority 60.
+4. WebDAV directory metadata may start or continue only when the audio cache is
+   ready and at least 60% full. The gate is checked before PROPFIND, before
+   every 4 KiB HTTP body read and periodically while extracting XML entries.
+   Browsing is allowed to wait; playback is not.
+5. Visited directory snapshots live in a bounded 1 MiB LRU. The root snapshot
+   is pinned. Returning to the 629-entry root therefore performs no network
+   request and no XML parse.
+6. DAV duplicate detection is a bounded 2048-slot hash table rather than the
+   previous quadratic name scan. Browser sorting was already changed to a
+   stable merge sort and DAV entry storage already grows geometrically.
+
+The scheduler yields directory work to MP3 playback. The maintainer accepted
+the resulting playback in 1.0.0; a server outage or corrupt file can stop audio.
+
+### 11.22 The DHCP boot gate
+
+The hardware measurement is repeatable: a successful DOL-015 initialization
+takes about 10.3–10.8 seconds. The network probe still runs on its own thread so
+the progress animation draws. After GUI threads exist, the main path now shows
+`Initializing network, please wait...`, disables the main window, supplies no
+cancel callback, and waits for a usable address. Failed three-attempt batches
+are restarted indefinitely. The dialog is removed only after `networkInit` is
+true; shutdown remains able to leave the loop.
+
+This is intentionally different from the later on-demand network prompt,
+which remains cancellable. The boot gate meets the product rule that no menu
+may be entered before the console has an IP.
+
+### 11.23 Final automated verification and hardware boundary
+
+On 2026-09-16, `tools/test-online.sh` passes 133 local requests covering URL
+validation, HTTP framing and redirects, cancellation, ICY metadata, WebDAV
+namespaces, a 1000-entry directory, range reads, repeated opens and the new
+metadata wait callback. The complete devkitPPC/libogc2 build also succeeds.
+
+Automated tests cannot listen to the GameCube DAC or reproduce a physical BBA
+and flat RTC. The reusable console acceptance run is specified in
+`HARDWARE_TEST.md`. Its decisive evidence is: HTTPS success without a date,
+`webdav: 512 KiB playback cache ready`, root `cache hit`, optional metadata wait
+lines, and no audible discontinuity through ten large-root navigation cycles.
+
+### 11.24 Release 1.0.0: audio fixes and hardware acceptance
+
+The next SD run showed two independent radio selection errors. Untagged Ogg
+Opus reached MPlayer with format zero, selecting raw PCM. An internal `Opus`
+tag plus a `ffopus` / `libopus` codec entry routes packets to the real decoder,
+following MPlayer's `DOCS/tech/codecs.conf.txt`. Restored host generation of
+`codecs.conf.h` keeps the built-in table synchronized with its configuration.
+AAC was absent from lavf's preferred list despite the native AAC demuxer being
+disabled, leading to lengthy MPEG video scans of a 64 kbit/s live stream.
+Preferring the ADTS AAC demuxer removes that wrong probing path.
+
+WebDAV's audio-only refill also called GX rendering while the GUI owned the
+display, hanging both threads. It now yields without drawing. The final cache
+policy uses one 512 KiB ring, a 16 KiB probe prefix and an approximately
+three-second prefill after tag seeks. The startup target is derived from
+compressed bitrate, with a one-second low-water threshold and background
+read-ahead. An empty buffer waits for data rather than prematurely resuming.
+
+The maintainer confirmed build `20260918-134405` works on real hardware on
+2026-09-18 and requested publication as 1.0.0. The release ships that exact
+binary with public examples and an installer that generates a per-installation
+TLS seed. Credentials, local logs, photographs and existing seeds are excluded.
+The fork version is independent of the retained upstream 3.0.0 settings label.

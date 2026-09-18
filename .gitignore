@@ -6,6 +6,13 @@
 # that went onto the card, and every log that came back from it
 /deployed/
 /logs/
+/vendor/
+/tests/out/
+/sd-package/
+/dist/
+/private/
+tls-seed.bin
+webdav.conf
 *.elf.map
 
 # The build/ directory is not ignored wholesale: build/wiimc.ld and
@@ -41,6 +48,7 @@ source/mplayer/ffmpeg/libavutil/avconfig.h
 # Host tools the cross build makes for itself
 source/mplayer/codec-cfg
 source/mplayer/codec-cfg.exe
+source/mplayer/codec-cfg.elf
 source/mplayer/ffmpeg/**/*_tablegen
 source/mplayer/ffmpeg/**/*_tablegen.exe
 
@@ -50,3 +58,4 @@ source/mplayer/ffmpeg/**/*_tablegen.exe
 *~
 .DS_Store
 Thumbs.db
+/PXL_*.jpg

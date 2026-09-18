@@ -276,9 +276,8 @@ static GuiImageData *musicOn = NULL;
 static GuiImageData *dvd = NULL;
 static GuiImageData *dvdOver = NULL;
 static GuiImageData *dvdOn = NULL;
-//static GuiImageData *online = NULL;
 //static GuiImageData *onlineOver = NULL;
-//static GuiImageData *onlineOn = NULL;
+static GuiText *onlineBtnLabel = NULL;
 static GuiImageData *settings = NULL;
 //static GuiImageData *settingsOver = NULL;
 static GuiImageData *settingsOn = NULL;
@@ -291,9 +290,9 @@ static GuiImage *musicBtnHighlightImg = NULL;
 //static GuiTooltip *dvdBtnTip = NULL;
 //static GuiImage *dvdBtnOverImg = NULL;
 //static GuiImage *dvdBtnHighlightImg = NULL;
-//static GuiTooltip *onlineBtnTip = NULL;
+static GuiTooltip *onlineBtnTip = NULL;
 //static GuiImage *onlineBtnOverImg = NULL;
-//static GuiImage *onlineBtnHighlightImg = NULL;
+static GuiImage *onlineBtnHighlightImg = NULL;
 //static GuiTooltip *settingsBtnTip = NULL;
 //static GuiImage *settingsBtnOverImg = NULL;
 static GuiImage *settingsBtnHighlightImg = NULL;
@@ -353,9 +352,9 @@ static bool creditsActive = false;
 
 static void UpdateMenuImages(int oldBtn, int newBtn)
 {	
-	if(oldBtn > MENU_SETTINGS)
+	if(oldBtn > MENU_SETTINGS && oldBtn != MENU_BROWSE_ONLINEMEDIA)
 		oldBtn = MENU_SETTINGS;
-	if(newBtn > MENU_SETTINGS)
+	if(newBtn > MENU_SETTINGS && newBtn != MENU_BROWSE_ONLINEMEDIA)
 		newBtn = MENU_SETTINGS;
 
 	if(oldBtn == newBtn)
@@ -369,8 +368,8 @@ static void UpdateMenuImages(int oldBtn, int newBtn)
 			musicBtn->SetImage(musicBtnImg); break;
 	//	case MENU_DVD:
 	//		dvdBtn->SetImage(dvdBtnImg); break;
-	//	case MENU_BROWSE_ONLINEMEDIA:
-	//		onlineBtn->SetImage(onlineBtnImg); break;
+		case MENU_BROWSE_ONLINEMEDIA:
+			onlineBtn->SetImage(onlineBtnImg); break;
 		case MENU_SETTINGS:
 			settingsBtn->SetImage(settingsBtnImg); break;
 	}
@@ -383,8 +382,8 @@ static void UpdateMenuImages(int oldBtn, int newBtn)
 			musicBtn->SetImage(musicBtnOnImg); break;
 	//	case MENU_DVD:
 	//		dvdBtn->SetImage(dvdBtnOnImg); break;
-	//	case MENU_BROWSE_ONLINEMEDIA:
-	//		onlineBtn->SetImage(onlineBtnOnImg); break;
+		case MENU_BROWSE_ONLINEMEDIA:
+			onlineBtn->SetImage(onlineBtnOnImg); break;
 		case MENU_SETTINGS:
 			settingsBtn->SetImage(settingsBtnOnImg); break;
 	}
@@ -403,9 +402,9 @@ static void SaveFolder()
 		case MENU_BROWSE_MUSIC:
 			strcpy(WiiSettings.musicFolder, browser.dir);
 			break;
-	//	case MENU_BROWSE_ONLINEMEDIA:
-	//		strcpy(WiiSettings.onlinemediaFolder, browser.dir);
-	//		break;
+		case MENU_BROWSE_ONLINEMEDIA:
+			strcpy(WiiSettings.onlinemediaFolder, browser.dir);
+			break;
 	}
 }
 
@@ -454,6 +453,28 @@ static void ChangeMenuMusic(void *ptr) { ChangeMenu(ptr, MENU_BROWSE_MUSIC); }
 static void ChangeMenuDVD(void *ptr) { ChangeMenu(ptr, MENU_DVD); }
 static void ChangeMenuOnline(void *ptr) { ChangeMenu(ptr, MENU_BROWSE_ONLINEMEDIA); }
 static void ChangeMenuSettings(void *ptr) { ChangeMenu(ptr, MENU_SETTINGS); }
+
+static int NextMainMenu(int menu)
+{
+	switch(menu)
+	{
+		case MENU_BROWSE_VIDEOS: return MENU_BROWSE_MUSIC;
+		case MENU_BROWSE_MUSIC: return MENU_BROWSE_ONLINEMEDIA;
+		case MENU_BROWSE_ONLINEMEDIA: return MENU_SETTINGS;
+		default: return MENU_BROWSE_VIDEOS;
+	}
+}
+
+static int PreviousMainMenu(int menu)
+{
+	switch(menu)
+	{
+		case MENU_BROWSE_MUSIC: return MENU_BROWSE_VIDEOS;
+		case MENU_BROWSE_ONLINEMEDIA: return MENU_BROWSE_MUSIC;
+		case MENU_SETTINGS: return MENU_BROWSE_ONLINEMEDIA;
+		default: return MENU_SETTINGS;
+	}
+}
 
 /****************************************************************************
  * ResumeGui
@@ -1167,11 +1188,7 @@ static void *GuiThread (void *arg)
 			if(userInput[0].wpad->btns_d & (WPAD_BUTTON_1 | WPAD_CLASSIC_BUTTON_X) ||
 				userInput[0].pad.btns_d & PAD_TRIGGER_R || userInput[0].cpad.data.down & CTR_BUTTON_R)
 			{
-				int newMenu = menuCurrent + 1;
-				if(newMenu == MENU_DVD && WiiSettings.dvdDisabled)
-					newMenu++;
-				if(newMenu > MENU_SETTINGS)
-					newMenu = MENU_BROWSE_VIDEOS;
+				int newMenu = NextMainMenu(menuCurrent);
 				
 				// GC controller can crash if screensaver is active.
 				if(screensaverThreadHalt != 0)
@@ -1180,11 +1197,7 @@ static void *GuiThread (void *arg)
 			else if(userInput[0].wpad->btns_d & (WPAD_BUTTON_2 | WPAD_CLASSIC_BUTTON_Y) ||
 					userInput[0].pad.btns_d & PAD_TRIGGER_L || userInput[0].cpad.data.down & CTR_BUTTON_L)
 			{
-				int newMenu = menuCurrent - 1;
-				if(newMenu == MENU_DVD && WiiSettings.dvdDisabled)
-					newMenu--;
-				if(newMenu < MENU_BROWSE_VIDEOS)
-					newMenu = MENU_SETTINGS;
+				int newMenu = PreviousMainMenu(menuCurrent);
 				
 				// GC controller can crash if screensaver is active.
 				if(screensaverThreadHalt != 0)
@@ -1258,11 +1271,7 @@ static void *GuiThread (void *arg)
 			else if(userInput[0].wpad->btns_d & (WPAD_BUTTON_1 | WPAD_CLASSIC_BUTTON_X) ||
 					userInput[0].pad.btns_d & PAD_TRIGGER_R || userInput[0].cpad.data.down & CTR_BUTTON_R)
 			{
-				int newMenu = menuCurrent + 1;
-				if(newMenu == MENU_DVD && WiiSettings.dvdDisabled)
-					newMenu++;
-				if(newMenu > MENU_SETTINGS)
-					newMenu = MENU_BROWSE_VIDEOS;
+				int newMenu = NextMainMenu(menuCurrent);
 				
 				// Make sure art is cleared, if the fade effect is enabled it may crash
 			//	if(thumbImg->IsVisible()) {
@@ -1272,7 +1281,8 @@ static void *GuiThread (void *arg)
 				
 				
 				// GC controller can crash if screensaver is active.
-				if(!creditsActive && screensaverThreadHalt != 0 && (WiiSettings.artwork ? thumbImg->GetEffect() != EFFECT_FADE : 1))
+				if(!creditsActive && screensaverThreadHalt != 0 &&
+					(!WiiSettings.artwork || !thumbImg || thumbImg->GetEffect() != EFFECT_FADE))
 					ChangeMenu(newMenu);
 			}
 			else if(wiiAudioOnly() && userInput[0].pad.btns_h & PAD_BUTTON_X && userInput[0].pad.btns_d & PAD_TRIGGER_L)
@@ -1284,11 +1294,7 @@ static void *GuiThread (void *arg)
 					userInput[0].pad.btns_d & PAD_TRIGGER_L ||
 								userInput[0].cpad.data.down & CTR_BUTTON_L)
 			{
-				int newMenu = menuCurrent - 1;
-				if(newMenu == MENU_DVD && WiiSettings.dvdDisabled)
-					newMenu--;
-				if(newMenu < MENU_BROWSE_VIDEOS)
-					newMenu = MENU_SETTINGS;
+				int newMenu = PreviousMainMenu(menuCurrent);
 				
 				// Make sure art is cleared, if the fade effect is enabled it may crash
 			//	if(thumbImg->IsVisible()) {
@@ -1301,7 +1307,8 @@ static void *GuiThread (void *arg)
 			//	}
 				
 				// GC controller can crash if screensaver is active.
-				if(!creditsActive && screensaverThreadHalt != 0 && (WiiSettings.artwork ? thumbImg->GetEffect() != EFFECT_FADE : 1))
+				if(!creditsActive && screensaverThreadHalt != 0 &&
+					(!WiiSettings.artwork || !thumbImg || thumbImg->GetEffect() != EFFECT_FADE))
 					ChangeMenu(newMenu);
 			}
 		}
@@ -3605,10 +3612,13 @@ static void *ThumbThread (void *arg)
 	return NULL;
 }
 
+extern "C" void MPlayerNetworkError(const char *);
+extern "C" const char *MPlayerGetNetworkError(void);
 static int LoadNewFile()
 {
-	//if(!ChangeInterface(loadedFile, NOTSILENT))
-	//	return 0;
+	MPlayerNetworkError(NULL);
+	if(!ChangeInterface(loadedFile, NOTSILENT))
+		return 0;
 
 	isLoadingFile = true;
 
@@ -3669,7 +3679,7 @@ static int LoadNewFile()
 	//	if(wii_error == 1)
 	//		ErrorPrompt("Resolution exceeds maximum allowed (1024x720)!");
 	//	else
-			ErrorPrompt("Error loading file!");
+			ErrorPrompt(MPlayerGetNetworkError()[0] ? MPlayerGetNetworkError() : "Error loading file!");
 
 		isLoadingFile = false;
 		return 0;
@@ -3739,6 +3749,7 @@ void UpdateBrowser()
 
 static void MenuBrowse(int menu)
 {
+	DebugMark("browse: %d init", menu);
 	ShutoffRumble();
 	ResetFiles();
 
@@ -3750,9 +3761,9 @@ static void MenuBrowse(int menu)
 		case MENU_BROWSE_MUSIC:
 			strcpy(browser.dir, WiiSettings.musicFolder);
 			break;
-	//	case MENU_BROWSE_ONLINEMEDIA:
-	//		strcpy(browser.dir, WiiSettings.onlinemediaFolder);
-	//		break;
+		case MENU_BROWSE_ONLINEMEDIA:
+			strcpy(browser.dir, WiiSettings.onlinemediaFolder);
+			break;
 		default:
 			return;
 	}
@@ -3805,7 +3816,7 @@ static void MenuBrowse(int menu)
 	else if(menu == MENU_BROWSE_MUSIC || (menu == MENU_BROWSE_ONLINEMEDIA && wiiAudioOnly()))
 		pagesize = 8;
 
-	if(menu == MENU_BROWSE_ONLINEMEDIA || (WiiSettings.artwork && (menu == MENU_BROWSE_VIDEOS || menu == MENU_BROWSE_MUSIC)))
+	if(WiiSettings.artwork && (menu == MENU_BROWSE_VIDEOS || menu == MENU_BROWSE_MUSIC))
 	{
 		fileBrowser = new GuiFileBrowser(screenwidth-200, pagesize);
 		fileBrowser->SetRightCutoff();
@@ -3921,6 +3932,8 @@ static void MenuBrowse(int menu)
 	ResumeGui();
 
 	// populate initial directory listing
+	if(menu == MENU_BROWSE_ONLINEMEDIA && !browserOnlineMedia.first)
+		ErrorPrompt("No radio stations. Add apps/wiimc/onlinemedia.xml to the SD card and restart.");
 
 	// check if USB drive is not yet mounted - delay if not
 #if 0
@@ -3965,7 +3978,8 @@ static void MenuBrowse(int menu)
 		ShowAction("Loading...");
 	}
 #endif
-	BrowserChangeFolder(false);
+	int initialEntries = BrowserChangeFolder(false);
+	DebugMark("browse: %d parsed %d entries", menu, initialEntries);
 
 	if(mainWindow->Find(disabled))
 	{
@@ -4031,6 +4045,7 @@ static void MenuBrowse(int menu)
 		ResumeGui();
 	}
 
+	DebugMark("browse: %d ready", menu);
 	while(menuCurrent == menu && !guiShutdown)
 	{
 		usleep(THREAD_SLEEP);
@@ -4157,12 +4172,8 @@ static void MenuBrowse(int menu)
 
 				// identified as a playlist, or file is an unrecognized audio or video extension or allowed protocol
 				// parse as a playlist
-				if(!IsAllowedExt(ext) && 
-					(browser.selIndex->type == TYPE_PLAYLIST ||
-					IsPlaylistExt(ext) || 
-					!IsAllowedProtocol(browser.selIndex->file) || 
-					(strncmp(browser.selIndex->file, "http:", 5) == 0 && !IsInternetStream(browser.selIndex->file)))
-					)
+				if(browser.selIndex->type == TYPE_PLAYLIST || IsPlaylistExt(ext) ||
+					(!IsAllowedExt(ext) && !IsAllowedProtocol(browser.selIndex->file)))
 				{
 					if(strncmp(browser.selIndex->file, "http:", 5) == 0)
 					{
@@ -4620,13 +4631,18 @@ static void MenuBrowse(int menu)
 done:
 	SuspendParseThread(); // halt parsing
 	SuspendGui();
-	if(menu == MENU_BROWSE_ONLINEMEDIA || (WiiSettings.artwork && (menu == MENU_BROWSE_VIDEOS || menu == MENU_BROWSE_MUSIC)))
+	if(thumbthread != LWP_THREAD_NULL || thumbImg)
 	{
 		thumbThreadHalt = 1;
-		LWP_JoinThread(thumbthread, NULL);
+		if(thumbthread != LWP_THREAD_NULL)
+			LWP_JoinThread(thumbthread, NULL);
 		thumbthread = LWP_THREAD_NULL;
-		mainWindow->Remove(thumbImg);
-		delete thumbImg;
+		if(thumbImg)
+		{
+			mainWindow->Remove(thumbImg);
+			delete thumbImg;
+			thumbImg = NULL;
+		}
 		// Prevent year/desc to remain stuck in some cases
 		mainWindow->Remove(fileYear);
 		mainWindow->Remove(fileInfo);
@@ -6146,185 +6162,43 @@ static void MenuSettingsDVD()
 
 static void MenuSettingsOnlineMedia()
 {
-#if 0
-	int ret;
-	int i = 0;
-	bool firstRun = true;
-	OptionList options;
-	char nulo[1] = {'\0'};
-
-	sprintf(options.name[i++], "Cache Fill");
-	if(!hide_onlinemediafolder)
-		sprintf(options.name[i++], "Online Media Folder");
-	else
-		sprintf(options.name[i++], nulo);
-	if(isYggdrasil)
-		sprintf(options.name[i++], "Yggdrasil Radio");
-	else
-		sprintf(options.name[i++], nulo);
-	if(isAnisonFM)
-		sprintf(options.name[i++], "ANISON.FM");
-	else
-		sprintf(options.name[i++], nulo);
-	sprintf(options.name[i++], "Banner Screensaver");
-
-	options.length = i;
-
-	for(i=0; i < options.length; i++)
-	{
-		options.value[i][0] = 0;
-		options.icon[i] = 0;
-	}
-
-	GuiText titleTxt("Settings - Online Media", 28, (GXColor){255, 255, 255, 255});
-	titleTxt.SetAlignment(ALIGN_LEFT, ALIGN_TOP);
-	titleTxt.SetPosition(49, 100);
-
-	GuiText backBtnTxt("Go back", 18, (GXColor){255, 255, 255, 255});
-	backBtnTxt.SetAlignment(ALIGN_CENTRE, ALIGN_TOP);
-	backBtnTxt.SetPosition(-6, 10);
-//	GuiImage backBtnImg(btnBottom);
-//	GuiImage backBtnImgOver(btnBottomOver);
-//	if(screenwidth > 640) {
-//		backBtnImg.SetScaleX(1.112f);
-//		backBtnImgOver.SetScaleX(1.112f);
-//	}
-	GuiImage backBtnArrow(arrowRightSmall);
-	backBtnArrow.SetAlignment(ALIGN_CENTRE, ALIGN_TOP);
-	backBtnArrow.SetPosition(backBtnTxt.GetTextWidth()/2 + 6, 11);
-//	GuiButton backBtn(screenwidth, btnBottom->GetHeight());
-	GuiButton backBtn(screenwidth, 0);
-	backBtn.SetAlignment(ALIGN_LEFT, ALIGN_BOTTOM);
-	backBtn.SetPosition(0, 0);
-	backBtn.SetLabel(&backBtnTxt);
-//	backBtn.SetImage(&backBtnImg);
-//	backBtn.SetImageOver(&backBtnImgOver);
-	backBtn.SetIcon(&backBtnArrow);
-	backBtn.SetTrigger(trigA);
-	backBtn.SetTrigger(trigB);
-
-	GuiOptionBrowser optionBrowser(screenwidth, 7, &options);
-	optionBrowser.SetPosition(0, 150);
-	optionBrowser.SetAlignment(ALIGN_LEFT, ALIGN_TOP);
-
-	SuspendGui();
-	GuiWindow w(screenwidth, screenheight);
-	w.Append(&backBtn);
-	mainWindow->Append(&optionBrowser);
-	mainWindow->Append(&w);
-	mainWindow->Append(&titleTxt);
-	ResumeGui();
-
-	while(menuCurrent == MENU_SETTINGS_ONLINEMEDIA && !guiShutdown)
-	{
-		usleep(THREAD_SLEEP);
-
-		ret = optionBrowser.GetClickedOption();
-
-		switch (ret)
-		{
-			case 0:
-				WiiSettings.onlineCacheFill += 5;
-
-				if(WiiSettings.onlineCacheFill > 100)
-					WiiSettings.onlineCacheFill = 5;
-				break;
-			case 1:
-				OnScreenKeyboard(WiiSettings.onlinemediaFolder, MAXPATHLEN);
-				if(!IsOnlineMediaPath(WiiSettings.onlinemediaFolder))
-					CleanupPath(WiiSettings.onlinemediaFolder);
-				break;
-			case 2:
-				++WiiSettings.yggdrasilQuality;
-				if(WiiSettings.yggdrasilQuality > 4)
-					WiiSettings.yggdrasilQuality = 0;
-				
-				//thumbs 
-			/*	if(WiiSettings.yggdrasilQuality < YGG_HI)
-					use_thumbs = true;
-				else
-					use_thumbs = false; */
-				
-				artSettingsChanged = true;
-				break;
-			case 3:
-				switch(WiiSettings.anisonfmQuality)
-				{
-					case ANISON_TUNEIN_ONLY:
-						WiiSettings.anisonfmQuality = ANISON_TUNEIN_ANISON;
-						artSettingsChanged = true;
-						break;
-					case ANISON_TUNEIN_ANISON:
-						WiiSettings.anisonfmQuality = ANISON_JUST_ANISON;
-						artSettingsChanged = true;
-						break;
-					case ANISON_JUST_ANISON:
-						WiiSettings.anisonfmQuality = ANISON_POSTER;
-						artSettingsChanged = true;
-						break;
-					case ANISON_POSTER:
-						WiiSettings.anisonfmQuality = ANISON_POSTER_HI;
-						artSettingsChanged = true;
-						break;
-					case ANISON_POSTER_HI:
-						WiiSettings.anisonfmQuality = ANISON_TUNEIN_ONLY;
-						artSettingsChanged = true;
-						break;
-				}
-				// mix it up by putting 200px covers before posters.
-				break;
-		}
-
-		if(ret >= 0 || firstRun)
-		{
-			firstRun = false;
-
-			sprintf (options.value[0], "%d%%", WiiSettings.onlineCacheFill);
-
-			/*if(WiiSettings.youtubeFormat == 5)
-				sprintf(options.value[1], "Low (400x240)");
-			else if(WiiSettings.youtubeFormat == 43)
-				sprintf(options.value[1], "Medium (480x360)");
-			else
-				sprintf(options.value[1], "High (854x480)");*/
-
-			snprintf(options.value[1], 60, "%s", WiiSettings.onlinemediaFolder);
-			
-			switch(WiiSettings.yggdrasilQuality)
-			{
-				case YGG_NONE:			sprintf(options.value[2], "Tunein"); break;
-				case YGG_TUNEIN:		sprintf(options.value[2], "Tunein+Yggdrasil"); break;
-				case YGG_THUMB:			sprintf(options.value[2], "LQ"); break;
-				case YGG_THUMB_LARGE:	sprintf(options.value[2], "HQ"); break;
-				case YGG_HI:			sprintf(options.value[2], "Highest Resolution"); break;
-			}
-			//sprintf (options.value[2], "%d", WiiSettings.yggdrasilQuality);
-			
-			switch(WiiSettings.anisonfmQuality)
-			{
-				case ANISON_TUNEIN_ONLY:	sprintf(options.value[3], "Tunein"); break;
-				case ANISON_TUNEIN_ANISON:	sprintf(options.value[3], "Tunein+ANISON.FM"); break;
-				case ANISON_JUST_ANISON:	sprintf(options.value[3], "Cover 200px"); break;
-				case ANISON_POSTER:			sprintf(options.value[3], "Poster 150px"); break;
-				case ANISON_POSTER_HI:		sprintf(options.value[3], "Poster 300px"); break;
-			}
-			//sprintf (options.value[3], "%d", WiiSettings.anisonfmQuality);
-			sprintf(options.value[4], "%s", WiiSettings.onlineBanners ? "On" : "Off");
-			optionBrowser.TriggerUpdate();
-		}
-
-		if(backBtn.GetState() == STATE_CLICKED)
-		{
-			ChangeMenuNoHistory(MENU_SETTINGS);
-		}
-	}
-	SuspendGui();
-	mainWindow->Remove(&optionBrowser);
-	mainWindow->Remove(&w);
-	mainWindow->Remove(&titleTxt);
-#endif
+    OptionList options;
+    options.length = 1;
+    strcpy(options.name[0], "Cache Fill");
+    options.icon[0] = 0;
+    snprintf(options.value[0], 60, "%d%%", WiiSettings.onlineCacheFill);
+    GuiText title("Settings - Web Radio", 28, (GXColor){255,255,255,255});
+    title.SetAlignment(ALIGN_LEFT, ALIGN_TOP);
+    title.SetPosition(49, 100);
+    GuiOptionBrowser list(screenwidth, 8, &options);
+    list.SetPosition(0, 150);
+    list.TriggerUpdate();
+    GuiButton back(0, 0);
+    back.SetTrigger(trigB);
+    back.SetSelectable(false);
+    SuspendGui();
+    mainWindow->Append(&title);
+    mainWindow->Append(&list);
+    mainWindow->Append(&back);
+    ResumeGui();
+    while(menuCurrent == MENU_SETTINGS_ONLINEMEDIA && !guiShutdown)
+    {
+        usleep(THREAD_SLEEP);
+        if(list.GetClickedOption() == 0)
+        {
+            WiiSettings.onlineCacheFill += 5;
+            if(WiiSettings.onlineCacheFill > 100) WiiSettings.onlineCacheFill = 5;
+            wiiSetOnlineCacheFill(WiiSettings.onlineCacheFill);
+            snprintf(options.value[0], 60, "%d%%", WiiSettings.onlineCacheFill);
+            list.TriggerUpdate();
+        }
+        if(back.GetState() == STATE_CLICKED) ChangeMenuNoHistory(MENU_SETTINGS);
+    }
+    SuspendGui();
+    mainWindow->Remove(&title);
+    mainWindow->Remove(&list);
+    mainWindow->Remove(&back);
 }
-
 static void MenuSettingsNetwork()
 {
 #if 0
@@ -7197,7 +7071,7 @@ static void MenuSettings()
 	sprintf(options.name[i++], "Playback");
 	sprintf(options.name[i++], "Music");
 	//sprintf(options.name[i++], "DVD");
-	//sprintf(options.name[i++], "Online Media");
+	sprintf(options.name[i++], "Web Radio");
 	//sprintf(options.name[i++], "Network");
 	//sprintf(options.name[i++], "Subtitles");
 
@@ -7271,9 +7145,9 @@ static void MenuSettings()
 		//	case 3:
 		//		ChangeMenuNoHistory(MENU_SETTINGS_DVD);
 		//		break;
-		//	case 3:
-		//		ChangeMenuNoHistory(MENU_SETTINGS_ONLINEMEDIA);
-		//		break;
+		case 3:
+		ChangeMenuNoHistory(MENU_SETTINGS_ONLINEMEDIA);
+		break;
 		//	case 4:
 		//		ChangeMenuNoHistory(MENU_SETTINGS_NETWORK);
 		//		break;
@@ -7737,85 +7611,22 @@ static void AudioNowPlayingCallback(void *ptr)
 	}
 #endif
 
-#if 0
-	// display ICY data
-	if(total <= 0.01)
-	{
-		if(strncmp(loadedFile, "http:", 5) == 0)
-		{
-			if(streamtitle_changed)
-			{
-				//ShowAreaInfo(MEM2_OTHER);
-				//ShowAreaInfo(MEM2_GUI);
-				//char debug_txtmem[32];
-				//sprintf(debug_txtmem, "%d", debug_space);
-				//audiobarNowPlaying[0]->SetText(debug_txtmem);
-
-				if(streamtitle[0] != 0)
-				{
-					artTimer = 0;
-					// Avoid showing art on other (not playing) entries.
-					if(strstr(browser.selIndex->file, loadedFile) != NULL && browser.selIndex->image != NULL) {
-					
-					if(WiiSettings.artwork && streamname[0] == 0x59 && streamname[1] == 0x67) // Yg
-						isYggdrasil = true;
-					else
-						isYggdrasil = false;
-					if(WiiSettings.artwork && browser.selIndex->tunein != NULL)
-						isTunein = true;
-					else
-						isTunein = false;
-					if(WiiSettings.artwork && streamname[0] == 0x41 && streamname[1] == 0x4E) // AN
-						isAnisonFM = true;
-					else
-						isAnisonFM = false;
-					if(WiiSettings.artwork && streamname[0] == 0x43 && streamname[1] == 0x56) // CV
-						isCVGM = true;
-					else
-						isCVGM = false;
-					
-					// Starting point
-					if(isTunein || isAnisonFM || isYggdrasil || isCVGM)
-						isUpdateArt = true;
-					}
-					
-					char *dash = strchr(streamtitle,'-');  
-					if(dash != NULL)
-					{
-						char artist[128];
-						snprintf(artist, dash-streamtitle+1, "%s", streamtitle);
-						audiobarNowPlaying[1]->SetText(artist);
-						++dash;
-						while(dash[0] == ' ') ++dash;
-						if(strlen(dash) == 0) dash = NULL;
-						audiobarNowPlaying[2]->SetText(dash);
-					}
-					else
-					{
-						audiobarNowPlaying[1]->SetText(streamtitle);
-						audiobarNowPlaying[2]->SetText(NULL);
-					}
-				}
-				else
-				{
-					audiobarNowPlaying[1]->SetText("Internet Stream");
-					audiobarNowPlaying[2]->SetText(NULL);
-				}
-				streamtitle_changed = 0;
-			}
-			if(streamname_changed)
-			{
-				if(streamname[0] != 0)
-					audiobarNowPlaying[3]->SetText(streamname);
-				else
-					audiobarNowPlaying[3]->SetText(NULL);
-				
-				streamname_changed = 0;
-			}
-		}
-		return;
-	}
-#endif
+    // Public radio metadata is independent of artwork and the selected row.
+    if(IsAllowedProtocol(loadedFile))
+    {
+        if(streamtitle_changed)
+        {
+            audiobarNowPlaying[1]->SetText(streamtitle[0] ? streamtitle : "Internet Stream");
+            audiobarNowPlaying[2]->SetText(NULL);
+            streamtitle_changed = 0;
+        }
+        if(streamname_changed)
+        {
+            audiobarNowPlaying[3]->SetText(streamname[0] ? streamname : loadedFileDisplay);
+            streamname_changed = 0;
+        }
+        return;
+    }
 
 	if(!nowPlayingSet && total > 0)
 	{
@@ -8416,9 +8227,7 @@ static void SetupGui()
 //	dvd = new GuiImageData (nav_dvd_png);
 //	dvdOver = new GuiImageData (nav_dvd_over_png);
 //	dvdOn = new GuiImageData (nav_dvd_on_png);
-//	online = new GuiImageData (nav_onlinemedia_png);
 //	onlineOver = new GuiImageData (nav_onlinemedia_over_png);
-//	onlineOn = new GuiImageData (nav_onlinemedia_on_png);
 	settings = new GuiImageData (nav_settings_png);
 //	settingsOver = new GuiImageData (nav_settings_over_png);
 	settingsOn = new GuiImageData (nav_settings_on_png);
@@ -8481,29 +8290,29 @@ static void SetupGui()
 	dvdBtn->SetEffectGrow();
 	dvdBtn->SetUpdateCallback(ChangeMenuDVD);
 */
-#if 0
 	onlineBtnTip = new GuiTooltip ("Online Media");
-	onlineBtnImg = new GuiImage(online);
-	onlineBtnOnImg = new GuiImage(onlineOn);
+	onlineBtnImg = new GuiImage(44, 40, (GXColor){70,70,70,255});
+	onlineBtnOnImg = new GuiImage(44, 40, (GXColor){120,120,120,255});
+	onlineBtnLabel = new GuiText("Radio", 16, (GXColor){255,255,255,255});
 //	onlineBtnOverImg = new GuiImage (onlineOver);
 	onlineBtnHighlightImg = new GuiImage (navHighlight);
 	onlineBtnHighlightImg->SetPosition(-20, 30);
 	onlineBtnHighlightImg->SetAlpha(128);
 	onlineBtn = new GuiButton(onlineBtnImg->GetWidth(), onlineBtnImg->GetHeight());
 	onlineBtn->SetAlignment(ALIGN_LEFT, ALIGN_TOP);
-	onlineBtn->SetPosition(210, 30);
+	onlineBtn->SetPosition(155, 30);
 	onlineBtnTip->SetPosition(1, 0); //fixes misalignment in anamorphic mode
 	//if(screenwidth > 640)
 	//	onlineBtnTip->SetPosition(4, 0); //same
 //	onlineBtn->SetTooltip(onlineBtnTip);
 	onlineBtn->SetImage(onlineBtnImg);
+	onlineBtn->SetLabel(onlineBtnLabel);
 //	onlineBtn->SetImageOver(onlineBtnOverImg);
 	onlineBtn->SetIconOver(onlineBtnHighlightImg);
 	onlineBtn->SetTrigger(trigA);
 	onlineBtn->SetSelectable(false);
 	onlineBtn->SetEffectGrow();
 	onlineBtn->SetUpdateCallback(ChangeMenuOnline);
-#endif
 
 //	settingsBtnTip = new GuiTooltip ("Settings");
 	settingsBtnImg = new GuiImage(settings);
@@ -8516,7 +8325,7 @@ static void SetupGui()
 	//settingsBtn->SetAlignment(ALIGN_RIGHT, ALIGN_TOP);
 	settingsBtn->SetAlignment(ALIGN_LEFT, ALIGN_TOP);
 	//settingsBtn->SetPosition(-215, 30);
-	settingsBtn->SetPosition(155, 30);
+	settingsBtn->SetPosition(210, 30);
 //	settingsBtnTip->SetPosition(-17, 0); //fixes misalignment in anamorphic mode
 	settingsBtn->SetImage(settingsBtnImg);
 //	settingsBtn->SetImageOver(settingsBtnOverImg);
@@ -8530,7 +8339,7 @@ static void SetupGui()
 	menuWindow->Append(videosBtn);
 	menuWindow->Append(musicBtn);
 	//menuWindow->Append(dvdBtn);
-	//menuWindow->Append(onlineBtn);
+	menuWindow->Append(onlineBtn);
 	menuWindow->Append(settingsBtn);
 
 	nowPlaying = new GuiText(NULL, 18, (GXColor){255, 255, 255, 255});
@@ -8651,6 +8460,14 @@ void WiiMenu()
 	EnableRumble();
 
 	usleep(2000);
+	if(firstboot)
+	{
+		/* Keep the menu disabled behind an English wait dialog until DHCP has
+		 * supplied a real address.  The network thread was started during boot,
+		 * so this usually only waits for the probe already in progress. */
+		WaitForNetworkAtBoot();
+		firstboot = false;
+	}
 	// Load settings (only happens once)
 	if(!LoadSettings())
 	{
@@ -8719,7 +8536,7 @@ void WiiMenu()
 		{
 			case MENU_BROWSE_VIDEOS:
 			case MENU_BROWSE_MUSIC:
-		//	case MENU_BROWSE_ONLINEMEDIA:				
+			case MENU_BROWSE_ONLINEMEDIA:
 				MenuBrowse(menuCurrent);
 				break;
 		//	case MENU_DVD:
@@ -8737,9 +8554,9 @@ void WiiMenu()
 			case MENU_SETTINGS_MUSIC:
 				MenuSettingsMusic();
 				break;
-		//	case MENU_SETTINGS_ONLINEMEDIA:
-		//		MenuSettingsOnlineMedia();
-		//		break;
+		case MENU_SETTINGS_ONLINEMEDIA:
+		MenuSettingsOnlineMedia();
+		break;
 		//	case MENU_SETTINGS_DVD:
 		//		MenuSettingsDVD();
 		//		break;

@@ -204,7 +204,7 @@ void StartNetworkThread()
 #ifdef WANT_NETWORK
 	if(networkthread == LWP_THREAD_NULL)
 		LWP_CreateThread(&networkthread, netcb, NULL, netstack, sizeof(netstack), 40);
-	else
+	else if(LWP_ThreadIsSuspended(networkthread))
 		LWP_ResumeThread(networkthread);
 #endif
 }
@@ -229,6 +229,13 @@ static void StopNetworkThread()
 }
 
 extern "C"{
+static char playbackNetworkError[160];
+void MPlayerNetworkError(const char *message)
+{
+	snprintf(playbackNetworkError, sizeof(playbackNetworkError), "%s", message ? message : "");
+	if(playbackNetworkError[0]) DebugMark("network playback: %s", playbackNetworkError);
+}
+const char *MPlayerGetNetworkError(void) { return playbackNetworkError; }
 /* A breadcrumb MPlayer can drop that is flushed to the card before it returns.
  * It lives here rather than in the MPlayer tree because the sub-make does not
  * get -DWANT_DEBUGLOG, so DebugMark is not visible there -- and because this
@@ -265,6 +272,48 @@ static void networkInitCallback(void *ptr)
 	}
 }
 
+/* The first screen must not become interactive before DHCP has produced a
+ * usable address.  ShowAction() disables mainWindow, while the progress and
+ * GUI threads continue drawing the throbber.  Unlike the on-demand network
+ * prompt below, this boot gate deliberately has no Return button and retries
+ * until an address exists. */
+bool WaitForNetworkAtBoot()
+{
+#ifndef WANT_NETWORK
+	return false;
+#else
+	if(networkInit)
+		return true;
+
+	DebugMark("net: boot gate waiting for a usable IP address");
+	ShowAction("Initializing network, please wait...");
+
+	while(!networkInit && !ExitRequested)
+	{
+		StartNetworkThread();
+
+		while(networkthread != LWP_THREAD_NULL &&
+			!LWP_ThreadIsSuspended(networkthread) &&
+			!ExitRequested)
+		{
+			usleep(50 * 1000);
+		}
+
+		if(!networkInit && !ExitRequested)
+		{
+			DebugMark("net: boot gate retrying DHCP");
+			sleep(1);
+		}
+	}
+
+	StopNetworkThread();
+	CancelAction();
+	DebugMark(networkInit ? "net: boot gate released on IP %s" :
+		"net: boot gate left during shutdown", wiiIP);
+	return networkInit;
+#endif
+}
+
 bool InitializeNetwork(bool silent)
 {
 	if(networkInit)
@@ -276,23 +325,19 @@ bool InitializeNetwork(bool silent)
 	ShowAction("Initializing network...", networkInitCallback);
 	cancelNetworkInit = false;
 
-	while(!networkInit)
+	if(!networkInit)
 	{
 		StartNetworkThread();
 
-		if(networkthread == LWP_THREAD_NULL)
-			break; // the thread could not be created; do not spin on it
-
-		while (!LWP_ThreadIsSuspended(networkthread) && !cancelNetworkInit)
+		while (networkthread != LWP_THREAD_NULL && !LWP_ThreadIsSuspended(networkthread) && !cancelNetworkInit)
 			usleep(50 * 1000);
 
 		StopNetworkThread();
-
-		if(silent || cancelNetworkInit)
-			break;
 	}
 
 	CancelAction();
+	if(!networkInit && !silent && !cancelNetworkInit)
+		ErrorPrompt("Network unavailable. Check the adapter and cable, then restart WiiMC.");
 
 	return networkInit;
 #endif

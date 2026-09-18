@@ -206,6 +206,7 @@ SRCS_COMMON-$(NATIVE_RTSP)           += stream/stream_rtsp.c \
 # asf_mmst_streaming.c -- so stream_info_asf is guarded out of that table the
 # same way, in stream.c.
 SRCS_COMMON-$(NETWORKING)            += stream/stream_netstream.c \
+                                        stream/stream_gc_http.c \
                                         stream/cookies.c \
                                         stream/http.c \
                                         stream/network.c \
@@ -739,11 +740,14 @@ mplayer$(EXESUF): EXTRALIBS += $(EXTRALIBS_MPLAYER)
 mencoder$(EXESUF) mplayer$(EXESUF):
 	$(CC) -o $@ $^ $(EXTRALIBS)
 
-#codec-cfg$(EXESUF): codec-cfg.c codec-cfg.h help_mp.h
-#	$(HOST_CC) -O -DCODECS2HTML -I. -Iffmpeg -o $@ $<
+# This generator runs on the host, not the GameCube (.elf is target EXESUF).
+# It uses target config.h so endian-dependent format constants remain correct.
+codec-cfg.exe: codec-cfg.c codec-cfg.h help_mp.h config.h libmpcodecs/img_format.h
+	$(HOST_CC) -O -DCODECS2HTML -I. -Iffmpeg -o $@ $<
 
-#codecs.conf.h: codec-cfg$(EXESUF) etc/codecs.conf
-#	./$^ > $@
+codecs.conf.h: codec-cfg.exe etc/codecs.conf
+	./codec-cfg.exe etc/codecs.conf > $@.tmp
+	mv $@.tmp $@
 
 #checksums: $(MPLAYER_DEPS) $(MENCODER_DEPS) mplayer$(EXESUF) mencoder$(EXESUF)
 #	md5sum $^ > checksums

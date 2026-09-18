@@ -80,49 +80,83 @@ static void Reset(BROWSER *info)
 
 void SortBrowser(BROWSER *_browser, int ( * comparator ) ( const void *, const void * ) )
 {
-	/* preform a bubble sort on the list */
-	BROWSERENTRY *a = NULL;
-	BROWSERENTRY *b = NULL; 
-	BROWSERENTRY *e = NULL; 
-	BROWSERENTRY *tmp = NULL; 
-	BROWSERENTRY *tmp2 = NULL; 
+	/* Stable bottom-up merge sort. Large network folders used to be sorted
+	 * repeatedly with a quadratic bubble sort while audio was playing. */
 	BROWSERENTRY *head = _browser->first;
-	BROWSERENTRY *tail = _browser->last;
-	int pos;
-	if(!head) return;
-	/*  tmp2 <-> a <-> b <-> tmp */
-	while(e != head->next) 
+	if(!head || !head->next)
+		return;
+
+	size_t width = 1;
+	BROWSERENTRY *tail = NULL;
+	for(;;)
 	{
-		a = head;
-		b = a->next;
-		while(a != e) 
+		BROWSERENTRY *p = head;
+		BROWSERENTRY *newHead = NULL;
+		tail = NULL;
+		size_t merges = 0;
+
+		while(p)
 		{
-			if(comparator(a,b)>0)
-			{	   
-				pos=a->pos;
-				tmp = b->next;
-				tmp2 = a->prior;
-				b->next = a;
-				b->prior = tmp2;
-				if(tmp2) tmp2->next = b;
-				a->next = tmp;
-				a->prior = b;
-				if(tmp) tmp->prior = a;
-				if(!tmp2) head = b;
-				if(!tmp) tail = a;
-				a->pos=b->pos;
-				b->pos=pos;
-			} 
-			else 
+			merges++;
+			BROWSERENTRY *q = p;
+			size_t pCount = 0;
+			for(size_t i = 0; i < width && q; ++i)
 			{
-				a = a->next;
+				pCount++;
+				q = q->next;
 			}
-			b = a->next;
-			if(b == e) e = a;
+			size_t qCount = width;
+
+			while(pCount || (qCount && q))
+			{
+				BROWSERENTRY *entry;
+				if(!pCount)
+				{
+					entry = q;
+					q = q->next;
+					qCount--;
+				}
+				else if(!qCount || !q)
+				{
+					entry = p;
+					p = p->next;
+					pCount--;
+				}
+				else if(comparator(p, q) <= 0)
+				{
+					entry = p;
+					p = p->next;
+					pCount--;
+				}
+				else
+				{
+					entry = q;
+					q = q->next;
+					qCount--;
+				}
+
+				entry->prior = tail;
+				if(tail)
+					tail->next = entry;
+				else
+					newHead = entry;
+				tail = entry;
+			}
+			p = q;
 		}
+
+		tail->next = NULL;
+		head = newHead;
+		if(merges <= 1)
+			break;
+		width *= 2;
 	}
+
 	_browser->first = head;
 	_browser->last = tail;
+	int pos = 0;
+	for(BROWSERENTRY *entry = head; entry; entry = entry->next)
+		entry->pos = pos++;
 }
 
 static void ResetSubs() { Reset(&browserSubs); }
@@ -462,6 +496,7 @@ char *GetParentDir()
  *
  * Update current directory and set new entry list if directory has changed
  ***************************************************************************/
+#include "utils/webdav_device.h"
 int BrowserChangeFolder(bool updateDir, bool waitParse)
 {
 	if(updateDir && !UpdateDirName())
@@ -476,7 +511,8 @@ int BrowserChangeFolder(bool updateDir, bool waitParse)
 
 	if(browser.dir[0] != 0)
 	{
-		bool mounted = true;//ChangeInterface(browser.dir, NOTSILENT);
+		bool mounted = (menuCurrent == MENU_BROWSE_ONLINEMEDIA && IsOnlineMediaPath(browser.dir)) ||
+			ChangeInterface(browser.dir, NOTSILENT);
 		if(mounted)
 		{
 			char ext[7];
@@ -489,7 +525,7 @@ int BrowserChangeFolder(bool updateDir, bool waitParse)
 		}
 	}
 
-	if(isPlaylist || (strlen(browser.dir) > 10 && strncmp(browser.dir,"http:", 5) == 0))
+	if(isPlaylist)
 	{
 		int res = ParsePlaylistFile();
 
@@ -528,6 +564,17 @@ int BrowserChangeFolder(bool updateDir, bool waitParse)
 
 	int i;
 	char tmp[200];
+	if(WebDAVConfigured())
+	{
+		BROWSERENTRY *entry = AddEntryFiles();
+		if(entry)
+		{
+			entry->file = strdup("dav1:");
+			entry->display = strdup(WebDAVName());
+			entry->type = TYPE_FOLDER;
+			entry->icon = ICON_SMB;
+		}
+	}
 
 	if(isInserted[DEVICE_SD])
 	{

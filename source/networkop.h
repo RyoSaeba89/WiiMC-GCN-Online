@@ -31,6 +31,7 @@ void UpdateCheck();
 bool DownloadUpdate();
 void StartNetworkThread();
 const char *NetworkAdapterName();
+bool WaitForNetworkAtBoot();
 bool InitializeNetwork(bool silent);
 bool ConnectShare (int num, bool silent);
 void CloseShare(int num);

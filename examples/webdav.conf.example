@@ -1,0 +1,7 @@
+# Copy to apps/wiimc/webdav.conf and restart WiiMC.
+# One read-only HTTP WebDAV share on a trusted LAN. No HTTPS or URL userinfo.
+# The URL includes the server's WebDAV endpoint and the music folder.
+url=http://192.168.1.10:8080/music/
+name=WebDAV Music
+username=
+password=

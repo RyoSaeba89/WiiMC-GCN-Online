@@ -33,6 +33,8 @@
 #define TTL_MAX      3600
 
 static u32 dns_server = 0;
+static mutex_t dns_mutex;
+void dns_init(void) { LWP_MutexInit(&dns_mutex, true); }
 
 /* ------------------------------------------------------------------ */
 /* Cache                                                               */
@@ -54,7 +56,9 @@ static int cache_n = 0;
 
 void dns_cache_flush(void)
 {
+	LWP_MutexLock(dns_mutex);
 	cache_n = 0;
+	LWP_MutexUnlock(dns_mutex);
 }
 
 static int cache_get(const char *host, u32 *ip)
@@ -192,7 +196,12 @@ int dns_parse_response(const u8 *buf, int len, u16 id, u32 *ip, u32 *ttl)
 /* Querying the server                                                 */
 /* ------------------------------------------------------------------ */
 
-void dns_set_server(u32 ip) { dns_server = ip; dns_cache_flush(); }
+void dns_set_server(u32 ip) {
+    LWP_MutexLock(dns_mutex);
+    dns_server = ip;
+    dns_cache_flush();
+    LWP_MutexUnlock(dns_mutex);
+}
 u32  dns_get_server(void)   { return dns_server; }
 
 static int dns_query(u32 server, const char *host, u32 *ip)
@@ -269,7 +278,7 @@ static int dns_query(u32 server, const char *host, u32 *ip)
 	return -1;
 }
 
-int dns_resolve(const char *host, u32 *ip)
+static int dns_resolve_locked(const char *host, u32 *ip)
 {
 	struct in_addr a;
 
@@ -283,6 +292,14 @@ int dns_resolve(const char *host, u32 *ip)
 	if (!dns_server)              return -1;
 
 	return dns_query(dns_server, host, ip);
+}
+
+int dns_resolve(const char *host, u32 *ip)
+{
+    LWP_MutexLock(dns_mutex);
+    int ret = dns_resolve_locked(host, ip);
+    LWP_MutexUnlock(dns_mutex);
+    return ret;
 }
 
 /* ------------------------------------------------------------------ */

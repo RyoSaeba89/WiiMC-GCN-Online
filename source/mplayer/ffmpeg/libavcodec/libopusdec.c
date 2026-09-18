@@ -19,8 +19,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
-#include "include/opus.h"
-#include "include/opus_multistream.h"
+#include <opus/opus.h>
+#include <opus/opus_multistream.h>
 
 #include "libavutil/common.h"
 #include "libavutil/avassert.h"

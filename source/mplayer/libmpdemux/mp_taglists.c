@@ -27,6 +27,8 @@
 #include "libavformat/internal.h"
 
 static const struct AVCodecTag mp_wav_tags[] = {
+    /* Ogg has no RIFF tag: zero would select codecs.conf's raw PCM entry. */
+    { CODEC_ID_OPUS,              MKTAG('O', 'p', 'u', 's')},
     { CODEC_ID_ADPCM_4XM,         MKTAG('4', 'X', 'M', 'A')},
     { CODEC_ID_ADPCM_ADX,         MKTAG('S', 'a', 'd', 'x')},
     { CODEC_ID_ADPCM_EA,          MKTAG('A', 'D', 'E', 'A')},

@@ -24,6 +24,8 @@
 #include "menu.h"
 #include "http.h"
 #include "wiimc.h"
+#include "http_client.h"
+#include "debuglog.h"
 
 //#define http_malloc malloc
 //#define http_free free
@@ -535,6 +537,28 @@ return 0;
 #endif
 u32 http_request(char *url, FILE *hfile, char *buffer, u32 maxsize, bool silent)
 {
-    return 0;
-//	return http_request(url, hfile, buffer, maxsize, silent, 0);
+    gc_http *h = (gc_http *)calloc(1, sizeof(*h));
+    u32 total = 0;
+    char chunk[4096];
+    if (!h || (!buffer && !hfile) || maxsize < 2) { free(h); return 0; }
+    if (gc_http_open(h, url, "GET", NULL, NULL, -1, -1, 0, NULL, NULL)) goto done;
+    while (total < maxsize - (buffer ? 1 : 0)) {
+        u32 wanted = maxsize - (buffer ? 1 : 0) - total;
+        if (wanted > sizeof(chunk)) wanted = sizeof(chunk);
+        int n = gc_http_read(h, chunk, wanted);
+        if (n < 0) { total = 0; break; }
+        if (!n) break;
+        if (buffer) memcpy(buffer + total, chunk, n);
+        else if (fwrite(chunk, 1, n, hfile) != (size_t)n) { total = 0; break; }
+        total += n;
+    }
+    if (buffer) buffer[total] = 0;
+done:
+    if (h->error[0]) {
+        DebugMark("http: %s", h->error);
+        if (!silent) ErrorPrompt(h->error);
+    }
+    gc_http_close(h);
+    free(h);
+    return total;
 }

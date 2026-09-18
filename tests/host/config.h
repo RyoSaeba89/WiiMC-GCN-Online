@@ -1,0 +1,2 @@
+#define GEKKO 1
+#define CONFIG_STREAM_CACHE 1

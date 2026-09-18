@@ -21,8 +21,14 @@
 
 #include "stream.h"
 
-extern float cache_fill_status;
+extern volatile float cache_fill_status;
 
+/* Read by the WiiMC WebDAV scheduler from another LWP thread. */
+float MPlayerCacheFillPercent(void);
+
+/* Wait at the current read position without reallocating the cache.
+ * Returns 1 on success/EOF, 0 on cancellation, -1 on failure. */
+int stream_cache_prefill(stream_t *stream, int min);
 void cache_uninit(stream_t *s);
 int cache_do_control(stream_t *stream, int cmd, void *arg);
 
