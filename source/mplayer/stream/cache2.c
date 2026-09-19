@@ -60,6 +60,7 @@ static void *ThreadProc(void *s);
 //static unsigned char *global_buffer=NULL;
 static void *cachearg = NULL;
 static mutex_t cache_mutex = LWP_MUTEX_NULL;
+static mutex_t cache_pos_mutex = LWP_MUTEX_NULL;
 volatile int stop_cache_thread = 1;
 extern void SuspendCacheThread();
 extern void ResumeCacheThread();
@@ -127,6 +128,82 @@ typedef struct {
 #endif
 } cache_vars_t;
 
+/* The four positions above are shared between the filler thread and the
+ * reader, and off_t is **64 bits** on this toolchain while the CPU is 32 --
+ * verified, not assumed. Every one of them is therefore written as two
+ * separate stores, and `volatile` provides neither atomicity nor ordering:
+ * the other thread can read the new half of a position beside the old half
+ * and compute a length that is negative, or gigabytes long. What that looks
+ * like from the couch is a false EOF, a corrupted ring, or a track change
+ * that hangs -- and it cannot reproduce on the x86-64 host test, where these
+ * loads are single instructions.
+ *
+ * So every cross-thread read takes a consistent snapshot of all four, and
+ * every publish goes through a helper. A dedicated mutex, not cache_mutex:
+ * the sections here are a handful of loads, they must never be held across
+ * a network read, and cache_stream_seek_long() publishes a position while
+ * already holding cache_mutex. Lock order is cache_mutex -> cache_pos_mutex,
+ * and nothing takes them the other way round. */
+typedef struct {
+  off_t min_filepos;
+  off_t max_filepos;
+  off_t read_filepos;
+  off_t offset;
+} cache_pos_t;
+
+#define CACHE_POS_LOCK()   do { if(cache_pos_mutex != LWP_MUTEX_NULL) LWP_MutexLock(cache_pos_mutex); } while(0)
+#define CACHE_POS_UNLOCK() do { if(cache_pos_mutex != LWP_MUTEX_NULL) LWP_MutexUnlock(cache_pos_mutex); } while(0)
+
+static void cache_pos_get(cache_vars_t *s, cache_pos_t *p)
+{
+  CACHE_POS_LOCK();
+  p->min_filepos  = s->min_filepos;
+  p->max_filepos  = s->max_filepos;
+  p->read_filepos = s->read_filepos;
+  p->offset       = s->offset;
+  CACHE_POS_UNLOCK();
+}
+
+/* The reader owns read_filepos. */
+static void cache_pos_set_read(cache_vars_t *s, off_t pos)
+{
+  CACHE_POS_LOCK();
+  s->read_filepos = pos;
+  CACHE_POS_UNLOCK();
+}
+
+static void cache_pos_advance_read(cache_vars_t *s, int len)
+{
+  CACHE_POS_LOCK();
+  s->read_filepos += len;
+  CACHE_POS_UNLOCK();
+}
+
+/* The filler owns min_filepos, max_filepos and offset. */
+static void cache_pos_set_min(cache_vars_t *s, off_t pos)
+{
+  CACHE_POS_LOCK();
+  s->min_filepos = pos;
+  CACHE_POS_UNLOCK();
+}
+
+/* Published as one step: a reader that saw the new max_filepos must also see
+ * the offset that goes with it, or its wrap arithmetic lands anywhere. */
+static void cache_pos_commit_fill(cache_vars_t *s, int len, int wrapped)
+{
+  CACHE_POS_LOCK();
+  s->max_filepos += len;
+  if(wrapped) s->offset += s->buffer_size;
+  CACHE_POS_UNLOCK();
+}
+
+static void cache_pos_reset(cache_vars_t *s, off_t pos)
+{
+  CACHE_POS_LOCK();
+  s->offset = s->min_filepos = s->max_filepos = s->read_filepos = pos;
+  CACHE_POS_UNLOCK();
+}
+
 volatile float cache_fill_status=0;
 
 float MPlayerCacheFillPercent(void)
@@ -134,10 +211,24 @@ float MPlayerCacheFillPercent(void)
   return cache_fill_status;
 }
 
+/* Same tearing hazard: this is max_filepos minus read_filepos, one owned by
+ * each thread. */
+static void cache_update_fill_status(cache_vars_t *s)
+{
+  cache_pos_t p;
+
+  if(s->eof) { cache_fill_status = -1; return; }
+
+  cache_pos_get(s, &p);
+  cache_fill_status = (p.max_filepos - p.read_filepos) * 100.0 / s->buffer_size;
+}
+
 static void cache_flush(cache_vars_t *s)
 {
-  s->offset= // FIXME!?
-  s->min_filepos=s->max_filepos=s->read_filepos; // drop cache content :(
+  cache_pos_t p;
+
+  cache_pos_get(s, &p);
+  cache_pos_reset(s, p.read_filepos); // drop cache content :(
 }
 
 extern int getMESS;
@@ -152,15 +243,24 @@ static int cache_read(cache_vars_t *s, unsigned char *buf, int size)
   
   while(size>0 ){
     int pos,newb,len;
+    cache_pos_t p;
 
 	if(getMESS != 0 || controlledbygui == 2 || stop_cache_thread)
 		return total;
 	
   //printf("CACHE2_READ: 0x%X <= 0x%X <= 0x%X  \n",s->min_filepos,s->read_filepos,s->max_filepos);
 
-    if(s->read_filepos>=s->max_filepos || s->read_filepos<s->min_filepos){
-	// eof?
-	if(s->eof) break;
+    /* One snapshot per iteration: every test and every offset below has to
+     * agree with the others, and the filler is moving all of them. */
+    cache_pos_get(s, &p);
+
+    if(p.read_filepos>=p.max_filepos || p.read_filepos<p.min_filepos){
+	/* eof is only an answer once the reader has caught up with the filler.
+	 * Below min_filepos the bytes are not missing, they are merely not
+	 * fetched yet: the filler has to seek back and read them again. Taking
+	 * that for end-of-stream is what turned a backward seek after EOF into
+	 * a short read -- a track that plays once and never again. */
+	if(s->eof && p.read_filepos>=p.max_filepos) break;
 	if(GetTimerMS() - last_progress >= 30000) {
 	    mp_msg(MSGT_CACHE, MSGL_ERR, "cache: no data for 30 seconds\n");
 	    return total;
@@ -170,11 +270,11 @@ static int cache_read(cache_vars_t *s, unsigned char *buf, int size)
 	usec_sleep(READ_USLEEP_TIME); // 10ms
 	continue; // try again...
     }	
-    newb=s->max_filepos-s->read_filepos; // new bytes in the buffer
+    newb=p.max_filepos-p.read_filepos; // new bytes in the buffer
 
 //    printf("*** newb: %d bytes ***\n",newb);
 
-    pos=s->read_filepos - s->offset;
+    pos=p.read_filepos - p.offset;
     if(pos<0) pos+=s->buffer_size; else
     if(pos>=s->buffer_size) pos-=s->buffer_size;
 
@@ -205,7 +305,7 @@ static int cache_read(cache_vars_t *s, unsigned char *buf, int size)
     len=newb;
     // ...
 
-    s->read_filepos+=len;
+    cache_pos_advance_read(s, len);
     size-=len;
     total+=len;
     last_progress = GetTimerMS();
@@ -215,47 +315,85 @@ static int cache_read(cache_vars_t *s, unsigned char *buf, int size)
   //reset
   getWeird = 0;
   
-  cache_fill_status=s->eof ? -1 :
-      (s->max_filepos-s->read_filepos)*100.0/s->buffer_size;
+  cache_update_fill_status(s);
   return total;
 }
 
 static int cache_fill(cache_vars_t *s)
 {
 #ifdef GEKKO
-  if(!s || s->eof) 
+  if(!s)
   {
       cache_fill_status=-1;
 	  return 0;
   }
+
+  if(s->eof)
+  {
+      /* EOF latches, and once it has, this early return used to make the
+       * cache dead for good: no flush, no seek back, every later read
+       * answering 0.
+       *
+       * cache_stream_seek_long() clears s->eof when the reader seeks back,
+       * but that is a race it loses. The filler can already be inside a
+       * stream_read_internal() issued against the *old* position; that read
+       * returns 0 at the end of the file and sets eof again, a moment after
+       * the seek cleared it. From then on the reader sits below min_filepos
+       * with eof set, which is precisely the "out of boundaries" case the
+       * code below knows how to recover from -- and never reached it.
+       *
+       * On hardware this is a track that never buffers after the player has
+       * once run a file to its end. So: believe eof only while the reader is
+       * still inside the window it describes. */
+      cache_pos_t e;
+
+      cache_pos_get(s, &e);
+
+      if(e.read_filepos >= e.min_filepos && e.read_filepos <= e.max_filepos)
+      {
+          cache_fill_status=-1;
+          return 0;
+      }
+
+      s->eof = 0;
+      stream_reset(s->stream);
+  }
 #endif
 
   int back,back2,newb,space,len,pos;
-  off_t read=s->read_filepos;
+  cache_pos_t p;
+  off_t read;
   int read_chunk;
   int wraparound_copy = 0;
 
-  if(read<s->min_filepos || read>s->max_filepos){
+  /* The filler owns min_filepos, max_filepos and offset, but read_filepos is
+   * the reader's and moves under it, so the whole computation below works
+   * from one snapshot. */
+  cache_pos_get(s, &p);
+  read = p.read_filepos;
+
+  if(read<p.min_filepos || read>p.max_filepos){
       // seek...
       //mp_msg(MSGT_CACHE,MSGL_DBG2,"Out of boundaries... seeking to 0x%"PRIX64"  \n",(int64_t)read);
       // streaming: drop cache contents only if seeking backward or too much fwd:
       if(s->stream->type!=STREAMTYPE_STREAM ||
-          read<s->min_filepos || read>=s->max_filepos+s->seek_limit)
+          read<p.min_filepos || read>=p.max_filepos+s->seek_limit)
       {
     	cache_flush(s);
         if(s->stream->eof) stream_reset(s->stream);
         stream_seek_internal(s->stream,read);
+        cache_pos_get(s, &p); // the flush moved all four
         //mp_msg(MSGT_CACHE,MSGL_DBG2,"Seek done. new pos: 0x%"PRIX64"  \n",(int64_t)stream_tell(s->stream));
       }
   }
 
   // calc number of back-bytes:
-  back=read - s->min_filepos;
+  back=read - p.min_filepos;
   if(back<0) back=0; // strange...
   if(back>s->back_size) back=s->back_size;
 
   // calc number of new bytes:
-  newb=s->max_filepos - read;
+  newb=p.max_filepos - read;
   if(newb<0) newb=0; // strange...
 
   // calc free buffer space:
@@ -264,13 +402,12 @@ static int cache_fill(cache_vars_t *s)
   if(space<s->fill_limit){
 //    printf("Buffer is full (%d bytes free, limit: %d)\n",space,s->fill_limit);
 #ifdef GEKKO
-	  if(s->eof) cache_fill_status=-1;
-  	else cache_fill_status=(s->max_filepos-s->read_filepos)*100.0/s->buffer_size;
+    cache_update_fill_status(s);
 #endif
     return 0; // no fill...
   }
   // calc bufferpos:
-  pos=s->max_filepos - s->offset;
+  pos=p.max_filepos - p.offset;
   if(pos>=s->buffer_size) pos-=s->buffer_size; // wrap-around
 
 
@@ -295,7 +432,7 @@ static int cache_fill(cache_vars_t *s)
 #if 1
   // back+newb+space <= buffer_size
   back2=s->buffer_size-(space+newb); // max back size
-  if(s->min_filepos<(read-back2)) s->min_filepos=read-back2;
+  if(p.min_filepos<(read-back2)) cache_pos_set_min(s, read-back2);
 #else
   s->min_filepos=read-back; // avoid seeking-back to temp area...
 #endif
@@ -327,7 +464,7 @@ static int cache_fill(cache_vars_t *s)
 		else		
 		{
 		  //retry if we have cache
-		  cache_fill_status=(s->max_filepos-s->read_filepos)*100.0/s->buffer_size;
+		  cache_update_fill_status(s);
 		  if(cache_fill_status<5)
 		  {	  
 	  		s->eof=1;
@@ -365,14 +502,12 @@ else
 #else
   s->eof= !len;
 #endif
-  s->max_filepos+=len;
-  if(pos+len>=s->buffer_size){
-      // wrap...
-      s->offset+=s->buffer_size;
-  }
+  /* One publish: a reader that sees the new max_filepos must see the offset
+   * that belongs with it, or its wrap arithmetic points into the wrong half
+   * of the ring. */
+  cache_pos_commit_fill(s, len, pos+len>=s->buffer_size);
 #ifdef GEKKO
-  if(s->eof) cache_fill_status=-1;
-  else cache_fill_status=(s->max_filepos-s->read_filepos)*100.0/s->buffer_size;
+    cache_update_fill_status(s);
 #endif
   return len;
 
@@ -446,7 +581,7 @@ static int cache_execute_control(cache_vars_t *s) {
       break;
   }
   if (s->control_res == STREAM_OK && needs_flush) {
-    s->read_filepos = s->stream->pos;
+    cache_pos_set_read(s, s->stream->pos);
     s->eof = s->stream->eof;
     cache_flush(s);
   }
@@ -590,20 +725,26 @@ int stream_cache_prefill(stream_t *stream, int min)
     if (min > forward_limit) min = forward_limit;
 
     u64 last_progress = GetTimerMS();
-    off_t last_position = s->max_filepos;
-    while (s->read_filepos < s->min_filepos ||
-           s->max_filepos - s->read_filepos < min) {
+    cache_pos_t p;
+    cache_pos_get(s, &p);
+    off_t last_position = p.max_filepos;
+    /* Re-snapshot every turn: the filler is publishing into these while the
+     * loop reads them, and a torn max_filepos here shows up as a prefill that
+     * finishes early or never. */
+    for (cache_pos_get(s, &p);
+         p.read_filepos < p.min_filepos || p.max_filepos - p.read_filepos < min;
+         cache_pos_get(s, &p)) {
         if (getMESS || controlledbygui == 2 || stream_check_interrupt(0))
             return 0;
         if (s->eof) break; // short file: play the remaining bytes
 #ifdef GEKKO
         if (cntReconnect == 0) {
-            off_t available = s->max_filepos - s->read_filepos;
+            off_t available = p.max_filepos - p.read_filepos;
             ShowProgress("Buffering...", available > 0 ? (int)available : 0, min);
         }
 #endif
-        if (s->max_filepos != last_position) {
-            last_position = s->max_filepos;
+        if (p.max_filepos != last_position) {
+            last_position = p.max_filepos;
             last_progress = GetTimerMS();
         } else if (GetTimerMS() - last_progress >= 30000) {
             mp_msg(MSGT_CACHE, MSGL_ERR, "cache: prefill stalled for 30 seconds\n");
@@ -613,7 +754,8 @@ int stream_cache_prefill(stream_t *stream, int min)
         usec_sleep(20000);
     }
     if (getMESS || controlledbygui == 2) return 0;
-    if (s->eof && s->max_filepos == s->read_filepos && s->stream->error)
+    cache_pos_get(s, &p);
+    if (s->eof && p.max_filepos == p.read_filepos && s->stream->error)
         return -1;
     return 1;
 }
@@ -636,6 +778,8 @@ int stream_enable_cache(stream_t *stream,int size,int min,int seek_limit){
 #ifdef GEKKO
   if(cache_mutex == LWP_MUTEX_NULL)
     LWP_MutexInit(&cache_mutex, false);	
+  if(cache_pos_mutex == LWP_MUTEX_NULL)
+    LWP_MutexInit(&cache_pos_mutex, false);
 #endif
   s=cache_init(size,ss);
   if(s == NULL) return -1;
@@ -643,8 +787,7 @@ int stream_enable_cache(stream_t *stream,int size,int min,int seek_limit){
   s->stream=NULL; // owns a shallow copy, never the caller's stream
   s->seek_limit=seek_limit;
   stream->error=0;
-  s->read_filepos=stream->pos;
-  s->min_filepos=s->max_filepos=s->offset=s->read_filepos;
+  cache_pos_reset(s, stream->pos);
 
   //make sure that we won't wait from cache_fill
   //more data than it is allowed to fill
@@ -708,8 +851,10 @@ int stream_enable_cache(stream_t *stream,int size,int min,int seek_limit){
         goto err_out;
     }
     // wait until cache is filled at least prefill_init %
+    cache_pos_t init_pos;
+    cache_pos_get(s, &init_pos);
     mp_msg(MSGT_CACHE,MSGL_V,"CACHE_PRE_INIT: %"PRId64" [%"PRId64"] %"PRId64"  pre:%d  eof:%d  \n",
-	(int64_t)s->min_filepos,(int64_t)s->read_filepos,(int64_t)s->max_filepos,min,s->eof);
+	(int64_t)init_pos.min_filepos,(int64_t)init_pos.read_filepos,(int64_t)init_pos.max_filepos,min,s->eof);
 
     res = stream_cache_prefill(stream, min);
     if (res <= 0) goto err_out;
@@ -777,7 +922,11 @@ int cache_stream_fill_buffer(stream_t *s){
   int sector_size;
   if(!s->cache_pid) return stream_fill_buffer(s);
 
-  if(s->pos!=((cache_vars_t*)s->cache_data)->read_filepos) mp_msg(MSGT_CACHE,MSGL_ERR,"!!! read_filepos differs!!! report this bug...\n");
+  {
+    cache_pos_t p;
+    cache_pos_get((cache_vars_t*)s->cache_data, &p);
+    if(s->pos!=p.read_filepos) mp_msg(MSGT_CACHE,MSGL_ERR,"!!! read_filepos differs!!! report this bug...\n");
+  }
   sector_size = ((cache_vars_t*)s->cache_data)->sector_size;
   if (sector_size > STREAM_MAX_SECTOR_SIZE) {
     mp_msg(MSGT_CACHE, MSGL_ERR, "Sector size %i larger than maximum %i\n", sector_size, STREAM_MAX_SECTOR_SIZE);
@@ -809,7 +958,8 @@ int cache_stream_seek_long(stream_t *stream,off_t pos){
 //  mp_msg(MSGT_CACHE,MSGL_DBG2,"CACHE2_SEEK: 0x%"PRIX64" <= 0x%"PRIX64" (0x%"PRIX64") <= 0x%"PRIX64"  \n",s->min_filepos,pos,s->read_filepos,s->max_filepos);
 
   newpos=pos/s->sector_size; newpos*=s->sector_size; // align
-  stream->pos=s->read_filepos=newpos;
+  cache_pos_set_read(s, newpos);
+  stream->pos=newpos;
   s->eof=0; // !!!!!!!
 
 	LWP_MutexUnlock(cache_mutex);
@@ -881,7 +1031,11 @@ int cache_do_control(stream_t *stream, int cmd, void *arg) {
   // with and without cache if the protocol changes pos even
   // when an error happened.
   if (pos_change) {
-    stream->pos = s->read_filepos;
+    {
+      cache_pos_t p;
+      cache_pos_get(s, &p);
+      stream->pos = p.read_filepos;
+    }
     stream->eof = s->eof;
   }
   switch (cmd) {
