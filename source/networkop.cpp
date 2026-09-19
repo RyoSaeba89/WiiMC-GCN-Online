@@ -46,6 +46,41 @@ char wiiIP[16] = { 0 };
 static lwp_t networkthread = LWP_THREAD_NULL;
 static u8 netstack[32768] ATTRIBUTE_ALIGN (32);
 
+/* netcb() sets this on its way out. LWP_ThreadIsSuspended() cannot stand in
+ * for it: the worker is also "not suspended" while it is wedged, which is
+ * precisely the case the callers have to tell apart. */
+static volatile bool netThreadExited = false;
+
+/* Set when a worker had to be left running because it could not be reclaimed.
+ * It still owns the EXI lock and lwIP's globals, so no second one may start. */
+static bool netThreadAbandoned = false;
+
+/* How long the first screen waits before handing the console back.
+ *
+ * libogc2's if_configex() spins on LWP_YieldThread() until either an address
+ * arrives or its DHCP retry counter runs out. With an adapter present, a link
+ * up and nothing answering DHCP, neither ever happens: measured on hardware
+ * at 81 s and still spinning, with the thread in state 0 -- running, not
+ * blocked on anything. Nothing below this layer can be interrupted, so the
+ * wait has to be bounded from here (PORTING.md 3.1).
+ *
+ * The number comes from this console's own logs, not from taste. A healthy
+ * DOL-015 on Serial Port 1 returns an address in 10.8 to 11.1 s (builds
+ * 20260914-221604 through 20260918-082310). When the first attempt fails it
+ * does so at about 5.6 s, and the second then succeeds -- 11.5 s measured,
+ * and up to roughly 17 s if that second attempt takes the full time. So
+ * anything under 20 s would abandon a working adapter, and 30 s leaves room
+ * for a third attempt while staying far from the 81 s hang. */
+#define NET_BOOT_TIMEOUT_SECS 30
+
+/* How often the gate says what it can see while it waits. */
+#define NET_WAIT_NOTE_SECS 2
+
+/* How long a worker asked to stop gets before it is declared wedged. One
+ * parked between retries leaves immediately; one inside if_config() never
+ * will. */
+#define NET_STOP_TIMEOUT_SECS 2
+
 /* Which adapter answered, in words.
  *
  * This fork asks for none in particular: libogc2's if_config() tries the
@@ -124,8 +159,20 @@ static void * netcb (void *arg)
 	 * for -- the GUI keeps drawing "Initializing network..." and stays
 	 * cancellable while the probe runs.
 	 *
-	 * DHCP only. There is no static-address setting anywhere in the menus to
-	 * read one from, and adding one is not phase 1. */
+	 * DHCP unless settings.xml carries a static address. That escape hatch
+	 * exists because the DHCP wait cannot be interrupted: libogc2's
+	 * if_configex() spins on LWP_YieldThread() until an address arrives or
+	 * its retry counter runs out, and on a link whose server never completes
+	 * the exchange, neither happens -- 81 s and counting on hardware, thread
+	 * state 0, running. Nothing above this layer can cut that short, so the
+	 * only real cure is not to enter it. The static path returns as soon as
+	 * the adapter probe is done. */
+	const bool useStatic = UsableAddress(WiiSettings.netStaticIP);
+
+	if(WiiSettings.netStaticIP[0] && !useStatic)
+		DebugMark("net: netStaticIP '%s' is not an address -- falling back to DHCP",
+			WiiSettings.netStaticIP);
+
 	while(netHalt != 2)
 	{
 		int retry = 3;
@@ -135,8 +182,28 @@ static void * netcb (void *arg)
 			char ip[16] = "", mask[16] = "", gw[16] = "";
 			s32 res;
 
-			DebugMark("net: if_config (dhcp), attempt %d", 4 - retry);
-			res = if_config(ip, mask, gw, true);
+			if(useStatic)
+			{
+				/* if_config() reads these three when use_dhcp is false. */
+				snprintf(ip, sizeof(ip), "%s", WiiSettings.netStaticIP);
+				snprintf(mask, sizeof(mask), "%s",
+					UsableAddress(WiiSettings.netStaticMask) ? WiiSettings.netStaticMask : "255.255.255.0");
+				/* if_config() runs inet_addr() over all three strings and
+				 * only checks the pointers for NULL, never for empty. An
+				 * empty gateway would come back as 255.255.255.255, so give
+				 * it an address that parses to "none". */
+				snprintf(gw, sizeof(gw), "%s",
+					UsableAddress(WiiSettings.netStaticGW) ? WiiSettings.netStaticGW : "0.0.0.0");
+
+				DebugMark("net: if_config (static %s/%s gw %s), attempt %d",
+					ip, mask, gw[0] ? gw : "none", 4 - retry);
+				res = if_config(ip, mask, gw, false);
+			}
+			else
+			{
+				DebugMark("net: if_config (dhcp), attempt %d", 4 - retry);
+				res = if_config(ip, mask, gw, true);
+			}
 
 			if(res >= 0 && UsableAddress(ip))
 			{
@@ -148,7 +215,9 @@ static void * netcb (void *arg)
 
 				/* The resolver queries the gateway: DHCP hands one back, every
 				 * home router relays DNS, and there is no menu to configure a
-				 * server in. See PORTING.md 3.1. */
+				 * server in. On the static path the gateway is whatever
+				 * settings.xml gave, so an empty one costs name resolution --
+				 * which the log says out loud. See PORTING.md 3.1. */
 				if(UsableAddress(gw) && inet_aton(gw, &a))
 				{
 					dns_set_server(a.s_addr);
@@ -160,8 +229,8 @@ static void * netcb (void *arg)
 				}
 				dns_cache_flush();
 
-				DebugMark("net: up on %s -- ip %s mask %s gw %s",
-					netAdapter, wiiIP, mask, gw);
+				DebugMark("net: up on %s (%s) -- ip %s mask %s gw %s",
+					netAdapter, useStatic ? "static" : "dhcp", wiiIP, mask, gw);
 				networkInit = true;
 				break;
 			}
@@ -188,6 +257,8 @@ static void * netcb (void *arg)
 			usleep(100);
 		}
 	}
+
+	netThreadExited = true;
 #endif
 	return NULL;
 }
@@ -199,11 +270,36 @@ static void * netcb (void *arg)
  ***************************************************************************/
 void StartNetworkThread()
 {
+#ifdef WANT_NETWORK
+	if(netThreadAbandoned)
+	{
+		/* An abandoned worker may still finish -- if_config() can return
+		 * minutes later with an address in hand. Reclaim it when it does;
+		 * until then, refuse to run a second one beside it. */
+		if(!netThreadExited)
+			return;
+
+		LWP_JoinThread(networkthread, NULL);
+		networkthread = LWP_THREAD_NULL;
+		netThreadAbandoned = false;
+		DebugMark("net: the abandoned worker finished after all -- reclaimed");
+	}
+#endif
+
 	netHalt = 0;
 
 #ifdef WANT_NETWORK
 	if(networkthread == LWP_THREAD_NULL)
-		LWP_CreateThread(&networkthread, netcb, NULL, netstack, sizeof(netstack), 40);
+	{
+		netThreadExited = false;
+
+		if(LWP_CreateThread(&networkthread, netcb, NULL, netstack, sizeof(netstack), 40) != 0)
+		{
+			networkthread = LWP_THREAD_NULL;
+			netThreadExited = true;
+			DebugMark("net: could not create the network thread");
+		}
+	}
 	else if(LWP_ThreadIsSuspended(networkthread))
 		LWP_ResumeThread(networkthread);
 #endif
@@ -214,18 +310,43 @@ void StartNetworkThread()
  *
  * Signals the network thread to stop
  ***************************************************************************/
-static void StopNetworkThread()
+/* Reclaims the worker, or reports that it could not be reclaimed.
+ *
+ * The previous version returned early whenever the thread was *not*
+ * suspended -- that is, in the one case that matters, a worker still inside
+ * if_config(). Cancellation then did nothing at all and the caller was never
+ * told, so it went on believing the worker was gone while that worker was
+ * still free to write wiiIP and networkInit behind the GUI's back.
+ *
+ * A wedged worker is abandoned, never killed: it can hold the EXI lock and
+ * leave lwIP half-initialised, and LWP_JoinThread() on it would hang this
+ * caller for exactly as long as if_config() hangs that one. */
+static bool StopNetworkThread()
 {
-	if(networkthread == LWP_THREAD_NULL || !LWP_ThreadIsSuspended(networkthread))
-		return;
+	if(networkthread == LWP_THREAD_NULL)
+		return true;
 
 	netHalt = 2;
 
-	LWP_ResumeThread(networkthread);
+	if(LWP_ThreadIsSuspended(networkthread))
+		LWP_ResumeThread(networkthread);
 
-	// wait for thread to finish
+	for(int i = 0; i < NET_STOP_TIMEOUT_SECS * 50 && !netThreadExited; i++)
+		usleep(20 * 1000);
+
+	if(!netThreadExited)
+	{
+		if(!netThreadAbandoned)
+			DebugMark("net: the worker is still inside if_config() -- abandoned, not killed");
+
+		netThreadAbandoned = true;
+		return false;
+	}
+
 	LWP_JoinThread(networkthread, NULL);
 	networkthread = LWP_THREAD_NULL;
+	netThreadAbandoned = false;
+	return true;
 }
 
 extern "C"{
@@ -272,11 +393,19 @@ static void networkInitCallback(void *ptr)
 	}
 }
 
-/* The first screen must not become interactive before DHCP has produced a
- * usable address.  ShowAction() disables mainWindow, while the progress and
- * GUI threads continue drawing the throbber.  Unlike the on-demand network
- * prompt below, this boot gate deliberately has no Return button and retries
- * until an address exists. */
+/* The first screen waits for an address, but no longer waits for ever.
+ *
+ * ShowAction() disables mainWindow while the progress and GUI threads keep
+ * drawing the throbber.  After NET_BOOT_TIMEOUT_SECS the user is offered the
+ * choice the old gate never had: try again, or go on without a network.
+ *
+ * That choice is what makes the console usable at all.  Everything
+ * downstream of this call -- LoadSettings(), InitMPlayer(), the card browser,
+ * local playback -- used to sit behind a wait that a silent DHCP server could
+ * hold open indefinitely, so one unanswered broadcast took the whole
+ * application with it.
+ *
+ * Returns true only with a usable address. */
 bool WaitForNetworkAtBoot()
 {
 #ifndef WANT_NETWORK
@@ -285,31 +414,77 @@ bool WaitForNetworkAtBoot()
 	if(networkInit)
 		return true;
 
-	DebugMark("net: boot gate waiting for a usable IP address");
-	ShowAction("Initializing network, please wait...");
+	DebugMark("net: boot gate waiting up to %d s for a usable IP address",
+		NET_BOOT_TIMEOUT_SECS);
 
 	while(!networkInit && !ExitRequested)
 	{
+		u64 started = gettime();
+
+		ShowAction("Initializing network, please wait...");
 		StartNetworkThread();
 
-		while(networkthread != LWP_THREAD_NULL &&
+		u64 noted = started;
+
+		while(!networkInit && !ExitRequested &&
+			networkthread != LWP_THREAD_NULL &&
 			!LWP_ThreadIsSuspended(networkthread) &&
-			!ExitRequested)
+			diff_sec(started, gettime()) < NET_BOOT_TIMEOUT_SECS)
 		{
 			usleep(50 * 1000);
+
+			if(diff_sec(noted, gettime()) >= NET_WAIT_NOTE_SECS)
+			{
+				/* What happens inside if_configex() cannot be reached from
+				 * here, but the one thing its loop is waiting for can be
+				 * read: net_gethostip() is a single load from the netif that
+				 * DHCP fills in, safe from any thread at any time. An
+				 * address appearing here while the probe keeps running would
+				 * mean the loop is stuck on something other than the
+				 * address; all zeroes to the end means nothing answered. */
+				u32 ip = net_gethostip();
+
+				noted = gettime();
+				DebugMark("net: waiting %u s -- netif ip %u.%u.%u.%u",
+					(unsigned)diff_sec(started, gettime()),
+					(unsigned)((ip >> 24) & 0xff), (unsigned)((ip >> 16) & 0xff),
+					(unsigned)((ip >> 8) & 0xff), (unsigned)(ip & 0xff));
+			}
 		}
 
-		if(!networkInit && !ExitRequested)
+		CancelAction();
+
+		if(networkInit || ExitRequested)
+			break;
+
+		if(StopNetworkThread())
+			DebugMark("net: boot gate -- the probe gave up without an address");
+		else
+			DebugMark("net: boot gate gave up after %u s -- the probe is still running",
+				(unsigned)diff_sec(started, gettime()));
+
+		if(WindowPrompt("Network",
+			"No address yet. The adapter may be missing, the cable unplugged, "
+			"or the DHCP server silent. You can continue without a network and "
+			"play from the card, or set netStaticIP in settings.xml to skip "
+			"DHCP entirely.",
+			"Retry", "Continue offline") == 0)
 		{
-			DebugMark("net: boot gate retrying DHCP");
-			sleep(1);
+			DebugMark("net: boot gate released offline at the user's request");
+			break;
 		}
 	}
 
-	StopNetworkThread();
-	CancelAction();
-	DebugMark(networkInit ? "net: boot gate released on IP %s" :
-		"net: boot gate left during shutdown", wiiIP);
+	if(networkInit)
+	{
+		StopNetworkThread();
+		DebugMark("net: boot gate released on IP %s", wiiIP);
+	}
+	else if(ExitRequested)
+	{
+		DebugMark("net: boot gate left during shutdown");
+	}
+
 	return networkInit;
 #endif
 }

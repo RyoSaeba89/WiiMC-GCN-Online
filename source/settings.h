@@ -192,6 +192,12 @@ struct SWiiSettings {
 	int 	anisonfmQuality;
 	int 	onlineBanners;
 	// Network
+	/* A static address, so the console can reach the network on a link whose
+	 * DHCP never answers. Empty netStaticIP means DHCP, which is the default.
+	 * There is no menu for these yet: they are edited in settings.xml. */
+	char	netStaticIP[16];
+	char	netStaticMask[16];
+	char	netStaticGW[16];
 	SMBSettings smbConf[MAX_SHARES];
 	FTPSettings ftpConf[MAX_SHARES];
 	// Subtitles

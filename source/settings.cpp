@@ -400,7 +400,10 @@ createXMLSetting("onlinemediaFolder", "Online media folder", WiiSettings.onlinem
 //	createXMLSetting("anisonfmQuality", "ANISON.FM artstyle", toStr(WiiSettings.anisonfmQuality));
 //	createXMLSetting("onlineBanners", "Online Screensaver", toStr(WiiSettings.onlineBanners));
 	// Network
-//	createXMLSection("Network", "Network Settings");
+	createXMLSection("Network", "Network Settings");
+	createXMLSetting("netStaticIP", "Static IP address (empty = DHCP)", WiiSettings.netStaticIP);
+	createXMLSetting("netStaticMask", "Static netmask", WiiSettings.netStaticMask);
+	createXMLSetting("netStaticGW", "Static gateway", WiiSettings.netStaticGW);
 //	for(int i=0; i<MAX_SHARES; i++)
 //		createXMLSMBShare(i);
 	//for(int i=0; i<MAX_SHARES; i++)
@@ -814,6 +817,10 @@ void DefaultSettings ()
 	WiiSettings.artworkFade = 0;
 	WiiSettings.nativeLoops = 0;
 	WiiSettings.musicFolder[0] = 0;
+	// Network -- empty means DHCP
+	WiiSettings.netStaticIP[0] = 0;
+	WiiSettings.netStaticMask[0] = 0;
+	WiiSettings.netStaticGW[0] = 0;
 	// DVD
 	WiiSettings.dvdMenu = 1;
 	WiiSettings.dvdDisabled = 1;
@@ -1360,6 +1367,10 @@ static bool LoadSettingsFile(char * filepath)
 				// Online Media
 			loadXMLSetting(&WiiSettings.onlineCacheFill, "onlineCacheFill");
 			loadXMLSetting(WiiSettings.onlinemediaFolder, "onlinemediaFolder", sizeof(WiiSettings.onlinemediaFolder));
+				// Network
+				loadXMLSetting(WiiSettings.netStaticIP, "netStaticIP", sizeof(WiiSettings.netStaticIP));
+				loadXMLSetting(WiiSettings.netStaticMask, "netStaticMask", sizeof(WiiSettings.netStaticMask));
+				loadXMLSetting(WiiSettings.netStaticGW, "netStaticGW", sizeof(WiiSettings.netStaticGW));
 			//	loadXMLSetting(&WiiSettings.yggdrasilQuality, "yggdrasilQuality");
 			//	loadXMLSetting(&WiiSettings.anisonfmQuality, "anisonfmQuality");
 			//	loadXMLSetting(&WiiSettings.onlineBanners, "onlineBanners");
