@@ -7,6 +7,11 @@ extern "C" {
 #define GC_DAV_MAX_ENTRIES 1024
 typedef struct {
     char url[GC_HTTP_URL_MAX], name[80], authorization[1025];
+    /* Asked before the connect and between socket operations, so a stop or a
+     * track change reaches the socket instead of waiting out the transport's
+     * own timeouts. Left NULL, every request runs to completion. */
+    gc_net_cancel_fn cancel;
+    void *cancel_opaque;
 } gc_dav_config;
 typedef struct { char name[256]; int directory; int64_t size; } gc_dav_entry;
 typedef struct {

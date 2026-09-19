@@ -113,12 +113,47 @@ static int prepare(char *error, size_t cap)
         mbedtls_ctr_drbg_random(&rng, next_seed, sizeof(next_seed))) {
         snprintf(error, cap, "TLS random generator failed"); goto done;
     }
-    f = fopen(path, "wb");
-    if (!f || fwrite(next_seed, 1, sizeof(next_seed), f) != sizeof(next_seed) || fflush(f)) {
-        snprintf(error, cap, "Cannot update TLS seed on SD card"); goto done;
+    /* Roll the seed through a temporary file and a rename, never in place.
+     *
+     * fopen(path, "wb") truncates before it writes. A console switched off
+     * or reset in that window -- and this one gets reset a lot -- left a
+     * zero-length tls-seed.bin, which is the only seed there is: HTTPS then
+     * refuses to start until the card is prepared again from the PC.
+     *
+     * The rename is the commit point. FAT cannot rename onto an existing
+     * name, so the old file is removed first; that leaves a window where
+     * neither name is the seed, which is why the read of the old seed above
+     * has already finished and next_seed is in memory. */
+    {
+        char temp[1100];
+        int written;
+
+        snprintf(temp, sizeof(temp), "%s/tls-seed.tmp", root);
+        remove(temp);
+
+        f = fopen(temp, "wb");
+        written = f && fwrite(next_seed, 1, sizeof(next_seed), f) == sizeof(next_seed) && !fflush(f);
+        if (f && fclose(f)) written = 0;
+        f = NULL;
+
+        if (!written) {
+            remove(temp);
+            snprintf(error, cap, "Cannot update TLS seed on SD card"); goto done;
+        }
+
+        if (remove(path) || rename(temp, path)) {
+            /* The old seed is already gone or the rename failed: put the new
+             * one where it belongs by copying, so the card is never left
+             * without a seed. */
+            f = fopen(path, "wb");
+            written = f && fwrite(next_seed, 1, sizeof(next_seed), f) == sizeof(next_seed) && !fflush(f);
+            if (f && fclose(f)) written = 0;
+            f = NULL;
+            remove(temp);
+
+            if (!written) { snprintf(error, cap, "Cannot save TLS seed"); goto done; }
+        }
     }
-    int close_result = fclose(f); f = NULL;
-    if (close_result) { snprintf(error, cap, "Cannot save TLS seed"); goto done; }
     snprintf(path, sizeof(path), "%s/ca.pem", root);
     f = fopen(path, "rb");
     if (!f) { snprintf(error, cap, "Missing apps/wiimc/ca.pem"); goto done; }

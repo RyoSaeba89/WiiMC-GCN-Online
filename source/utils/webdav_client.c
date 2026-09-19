@@ -151,7 +151,8 @@ static int query(const gc_dav_config *c, const char *path, int depth, gc_dav_ent
     if (!h || !urls || !target || !href || !basepath || !itempath || !name_slots) { error_out(error, cap, ENOMEM, "Out of memory"); goto done; }
     if (make_url(c, path, target, GC_HTTP_URL_MAX)) { error_out(error, cap, EINVAL, "Invalid WebDAV path"); goto done; }
     if (wait) wait(opaque);
-    if (gc_http_open(h, target, "PROPFIND", c->authorization, body, depth, -1, 0, NULL, NULL)) {
+    if (gc_http_open(h, target, "PROPFIND", c->authorization, body, depth, -1, 0,
+            c->cancel, c->cancel_opaque)) {
         error_out(error, cap, h->status == 404 ? ENOENT : h->status == 401 || h->status == 403 ? EACCES : EIO, h->error); goto done;
     }
     if (h->status != 207) { error_out(error, cap, EIO, "Server does not support WebDAV PROPFIND (expected HTTP 207)"); goto done; }
@@ -286,7 +287,8 @@ int gc_dav_read(gc_dav_file *f, void *buffer, int len)
     if (!f->http) { errno = EBADF; return -1; }
     if (len <= 0 || f->position >= f->size) return 0;
     if (!f->http->conn) {
-        if (gc_http_open(f->http, f->url, "GET", f->config->authorization, NULL, -1, f->position, 0, NULL, NULL)) { errno = EIO; return -1; }
+        if (gc_http_open(f->http, f->url, "GET", f->config->authorization, NULL, -1, f->position, 0,
+                f->config->cancel, f->config->cancel_opaque)) { errno = EIO; return -1; }
         if ((f->http->total >= 0 && f->http->total != f->size) ||
             (f->http->length >= 0 && f->http->length != f->size - f->position)) {
             gc_http_close(f->http); errno = EIO; return -1;
