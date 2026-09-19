@@ -2743,6 +2743,37 @@ static void DisplayCredits(void *ptr)
 	ResumeCreditsThread();
 }
 
+/* How long the menu waits for the player to let go of the current file. Far
+ * longer than a teardown, far shorter than the user's patience. */
+#define TRACK_END_TIMEOUT_SECS 10
+
+/* Wait for the player to finish the current file.
+ *
+ * controlledbygui == 2 means "end the current file"; MPlayer clears it once
+ * it has. The loops that waited on that had no way out, so a player that
+ * never answered took the menu thread with it: buttons dead, GUI thread
+ * still drawing, console apparently frozen with music still in the speakers.
+ *
+ * Returns false when the player did not answer in time. The caller carries
+ * on regardless -- a wrong next track beats a dead menu, and the log says
+ * which happened. */
+static bool WaitForTrackEnd()
+{
+	u64 started = gettime();
+
+	while(controlledbygui == 2)
+	{
+		if(diff_sec(started, gettime()) >= TRACK_END_TIMEOUT_SECS)
+		{
+			DebugMark("menu: the player did not release the file within %d s -- carrying on",
+				TRACK_END_TIMEOUT_SECS);
+			return false;
+		}
+		usleep(THREAD_SLEEP);
+	}
+	return true;
+}
+
 static void UpdateAudiobarModeBtn()
 {
 	switch(WiiSettings.playOrder)
@@ -4502,9 +4533,9 @@ static void MenuBrowse(int menu)
 		if(skipTrack) {
 			if(wiiAudioOnly())
 			{
+				RequestNextFile();
 				StopMPlayerFile(); // end this song
-				while(controlledbygui == 2) // wait for song to end
-					usleep(THREAD_SLEEP);
+				WaitForTrackEnd();
 				FindNextFile(true); // find next song
 			}
 			skipTrack = false;
@@ -4513,6 +4544,9 @@ static void MenuBrowse(int menu)
 	//	if(menu == MENU_BROWSE_ONLINEMEDIA)
 	//		continue;
 #if 0
+		/* Still off: SetImage() for this button is commented out where it is
+		 * built, so enabling the handler would only add an invisible hotspot
+		 * at the left edge of the audio bar. */
 		if(audiobarPlaylistBtn->GetState() == STATE_CLICKED)
 		{
 			audiobarPlaylistBtn->ResetState();
@@ -4521,6 +4555,7 @@ static void MenuBrowse(int menu)
 			FindFile();
 			fileBrowser->TriggerUpdate();
 		}
+#endif
 
 		if(audiobarBackwardBtn->GetState() == STATE_CLICKED)
 		{
@@ -4536,9 +4571,9 @@ static void MenuBrowse(int menu)
 			{
 				if(wiiAudioOnly())
 				{
+					RequestNextFile();
 					StopMPlayerFile(); // end this song
-					while(controlledbygui == 2) // wait for song to end
-						usleep(THREAD_SLEEP);
+					WaitForTrackEnd();
 					FindNextFile(true); // find next song
 				}
 				else
@@ -4558,8 +4593,7 @@ static void MenuBrowse(int menu)
 				}
 			}
 		}
-#endif
-#if 0
+
 		if(audiobarModeBtn->GetState() == STATE_CLICKED)
 		{
 			audiobarModeBtn->ResetState();
@@ -4569,7 +4603,6 @@ static void MenuBrowse(int menu)
 
 			UpdateAudiobarModeBtn();
 		}
-#endif
 		if(browserMusic.numEntries > 0)
 		{
 			if(browserMusic.numEntries == 1)
@@ -8460,15 +8493,12 @@ void WiiMenu()
 	EnableRumble();
 
 	usleep(2000);
-	if(firstboot)
-	{
-		/* Keep the menu disabled behind an English wait dialog until DHCP has
-		 * supplied a real address.  The network thread was started during boot,
-		 * so this usually only waits for the probe already in progress. */
-		WaitForNetworkAtBoot();
-		firstboot = false;
-	}
-	// Load settings (only happens once)
+
+	/* Load settings (only happens once) -- before the network, not after.
+	 *
+	 * netcb() reads WiiSettings to decide between DHCP and a static address,
+	 * and the whole settings file used to be unreachable behind a boot gate
+	 * that could never time out. */
 	if(!LoadSettings())
 	{
 		if(!SaveSettings(NOTSILENT))
@@ -8476,6 +8506,16 @@ void WiiMenu()
 			ExitRequested = true;
 			return;
 		}
+	}
+
+	if(firstboot)
+	{
+		/* Keep the menu disabled behind a wait dialog while the interface
+		 * comes up.  This gives up after a timeout and offers to continue
+		 * offline rather than holding everything below it. */
+		if(!WaitForNetworkAtBoot())
+			DebugMark("menu: continuing without a network address");
+		firstboot = false;
 	}
 
 	if(menuCurrent == -1)

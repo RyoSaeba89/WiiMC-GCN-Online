@@ -17,6 +17,7 @@
 #include <wiiuse/wpad.h>
 #endif
 
+#include <ogc/lwp_watchdog.h>
 #include <sys/iosupport.h>
 #include <di/di.h>
 #include <fat.h>
@@ -260,7 +261,7 @@ static ssize_t __out_write(struct _reent *r, int fd, const char *ptr, size_t len
 			gecko_buf_size = 0;
 			memset(gecko_buf_ptr, 0, GECKO_BUFFER_SIZE);
 		}
-		memcpy(gecko_buf+gecko_buf_size, ptr, len);
+		memcpy(gecko_buf_ptr+gecko_buf_size, ptr, len);
 		gecko_buf_size+=len;
 	}
 	
@@ -428,8 +429,24 @@ BROWSERENTRY *VideoPlaylistGetNextShuffle()
 /****************************************************************************
  * MPlayer interface
  ***************************************************************************/
+/* An explicit Next is a command, not auto-advance.
+ *
+ * The automatic path deliberately stops after one song in PLAY_SINGLE, which
+ * is what the mode means. Pressing Next, or X+R, is the user asking for the
+ * following track, and refusing that is how the transport button came to
+ * look broken. One shot: the flag is consumed by the next call. */
+static bool forceNextFile = false;
+
+extern "C" void RequestNextFile(void)
+{
+	forceNextFile = true;
+}
+
 extern "C" bool FindNextFile(bool load)
 {
+	const bool forced = forceNextFile;
+
+	forceNextFile = false;
 	nowPlayingSet = false;
 	
 	// Audio filter persist
@@ -551,7 +568,8 @@ extern "C" bool FindNextFile(bool load)
 	}
 	else
 	{
-		if(browserMusic.numEntries == 0 || (WiiSettings.playOrder == PLAY_SINGLE && browserMusic.selIndex != NULL))
+		if(browserMusic.numEntries == 0 ||
+			(!forced && WiiSettings.playOrder == PLAY_SINGLE && browserMusic.selIndex != NULL))
 		{
 			browserMusic.selIndex = NULL;
 			return false;
@@ -570,7 +588,8 @@ extern "C" bool FindNextFile(bool load)
 		{
 			browserMusic.selIndex = browserMusic.first;
 		}
-		else if(WiiSettings.playOrder == PLAY_CONTINUOUS)
+		else if(WiiSettings.playOrder == PLAY_CONTINUOUS ||
+			(forced && WiiSettings.playOrder != PLAY_SHUFFLE))
 		{
 			browserMusic.selIndex = browserMusic.selIndex->next;
 
@@ -750,9 +769,19 @@ bool InitMPlayer()
 	// create mplayer thread
 	mplayerstack=(u8*)(memalign(32,MPLAYER_STACKSIZE*sizeof(u8)));
 	if(mplayerstack == NULL)
+	{
 		DebugMark("mplayer: init FAILED, no memory for the %d KB thread stack", MPLAYER_STACKSIZE/1024);
+		return false;
+	}
 	memset(mplayerstack,0,MPLAYER_STACKSIZE*sizeof(u8));
-	LWP_CreateThread (&mthread, mplayerthread, NULL, mplayerstack, MPLAYER_STACKSIZE, 68);
+
+	if(LWP_CreateThread (&mthread, mplayerthread, NULL, mplayerstack, MPLAYER_STACKSIZE, 68) != 0)
+	{
+		DebugMark("mplayer: init FAILED, could not create the player thread");
+		free(mplayerstack);
+		mplayerstack = NULL;
+		return false;
+	}
 	DebugMark("mplayer: init done, data dir %s", appPath);
 
 	init = true;
@@ -771,9 +800,24 @@ void LoadMPlayerFile()
 	controlledbygui = 2; // signal any previous file to end
 	sync_interlace = 0; // reset interlace-handling flag
 
-	// wait for previous file to end
-	while(controlledbygui == 2)
-		usleep(100);
+	/* Wait for the previous file to end -- but not for ever. A player that
+	 * never clears the flag used to hold this thread, and with it every menu
+	 * action that loads a file. Ten seconds is far more than a teardown
+	 * needs; past that, loading the next file is still better than a dead
+	 * menu, and the log records which happened. */
+	{
+		u64 started = gettime();
+
+		while(controlledbygui == 2)
+		{
+			if(diff_sec(started, gettime()) >= 10)
+			{
+				DebugMark("mplayer: previous file did not end within 10 s -- loading anyway");
+				break;
+			}
+			usleep(100);
+		}
+	}
 
 	char *partitionlabel;
 	char ext[7];
@@ -1299,13 +1343,17 @@ int main(int argc, char *argv[])
 	gc_tls_init(appPath);
 #endif
 	
-	// Phase 1: bring the interface up in the background. if_config() blocks for
-	// seconds -- longer when no adapter answers and libogc2 walks all four
-	// drivers -- so it must not be on the boot path. Nothing waits on it here;
-	// the menu stays usable and the credits screen (Z) names what was found.
-	DebugMark("boot: StartNetworkThread");
-	StartNetworkThread();
-	usleep(100); //force network thread execution
+	/* Phase 1: the interface comes up on its own thread, because if_config()
+	 * blocks for seconds -- longer when no adapter answers and libogc2 walks
+	 * all four drivers -- so it must not be on the boot path.
+	 *
+	 * It is no longer started here. netcb() has to know whether a static
+	 * address is configured before it chooses DHCP, and DefaultSettings()
+	 * below had not even run yet at this point, let alone LoadSettings():
+	 * the worker was racing the defaults for the same struct. WiiMenu()
+	 * starts it right after the settings are loaded, which costs about a
+	 * tenth of a second of overlap and nothing else.
+	 */
 #if 0
 	u32 size = ( (1024*MAX_HEIGHT)+((MAX_WIDTH-1024)*MAX_HEIGHT) + (1024*(MAX_HEIGHT/2)*2) ) + // textures
                 (vmode->fbWidth * vmode->efbHeight * 4) + //videoScreenshot
