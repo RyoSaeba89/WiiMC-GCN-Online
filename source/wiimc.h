@@ -61,6 +61,9 @@ extern "C" {
 	
 bool FindNextFile(bool load);
 void RequestNextFile(void); // the next FindNextFile() advances whatever the mode
+void BuildFolderQueue(void); // snapshot the browsed folder as an implicit playlist
+void ClearFolderQueue(void);
+int FolderQueueCount(void);
 
 extern int controlledbygui;
 int mplayer_main(); // in mplayer.c

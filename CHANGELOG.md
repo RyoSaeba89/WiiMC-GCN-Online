@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Continuous, Shuffle, Loop and Through did nothing after the first song when
+  it had been started from the file browser: the automatic path walked the
+  playlist, which is empty until the playlist button is used, so MPlayer was
+  told there was no next song and parked. The folder the song was started from
+  now serves as the queue when there is no playlist, and the Next button works
+  in that state too.
+
 ## 1.0.0 - 2026-09-18
 
 First stable release of WiiMC-GCN-Online, based on WiiMC-GCN / WiiMC-SS 3.0.0.

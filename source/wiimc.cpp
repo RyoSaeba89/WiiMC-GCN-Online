@@ -429,6 +429,150 @@ BROWSERENTRY *VideoPlaylistGetNextShuffle()
 /****************************************************************************
  * MPlayer interface
  ***************************************************************************/
+/****************************************************************************
+ * The folder as an implicit queue
+ *
+ * browserMusic is the user's playlist, and it stays empty until they build
+ * one with the playlist button. A song started straight from the browser
+ * therefore reached FindNextFile() with nothing to walk: numEntries was zero,
+ * the music path returned false whatever the play order said, MPlayer parked
+ * in its "wait for a filename" loop and the GUI simply stayed in the browser.
+ * Continuous was continuous over an empty queue, so the second song of a
+ * folder never loaded -- on WebDAV, on the card, anywhere.
+ *
+ * The folder the song was started from now stands in for that missing
+ * playlist. It is a snapshot of the audio files of the current listing, in
+ * display order, taken on the GUI thread where the browser list is stable.
+ * FindNextFile() runs on the MPlayer thread, so it walks strings this module
+ * owns rather than a linked list the browser is free to free underneath it,
+ * and it keeps working after the user has browsed somewhere else. A real
+ * playlist always wins: the snapshot is only consulted when there is none.
+ ***************************************************************************/
+#define FOLDER_QUEUE_MAX 4096
+
+static char **folderQueue = NULL;
+static int folderQueueCount = 0;
+static int folderQueuePos = -1;
+
+extern "C" void ClearFolderQueue(void)
+{
+	for(int i = 0; i < folderQueueCount; i++)
+		free(folderQueue[i]);
+
+	free(folderQueue);
+	folderQueue = NULL;
+	folderQueueCount = 0;
+	folderQueuePos = -1;
+}
+
+extern "C" int FolderQueueCount(void)
+{
+	return folderQueueCount;
+}
+
+/* Call this from the GUI thread, once loadedFile holds the song about to
+ * start. An explicit playlist takes priority and leaves no snapshot. */
+extern "C" void BuildFolderQueue(void)
+{
+	ClearFolderQueue();
+
+	if(menuCurrent != MENU_BROWSE_MUSIC || browserMusic.numEntries > 0)
+		return;
+
+	int max = browser.numEntries;
+
+	if(max <= 0)
+		return;
+
+	if(max > FOLDER_QUEUE_MAX)
+		max = FOLDER_QUEUE_MAX;
+
+	folderQueue = (char **)malloc(max * sizeof(char *));
+
+	if(!folderQueue)
+		return;
+
+	char path[MAXPATHLEN];
+	char ext[7];
+
+	for(BROWSERENTRY *i = browser.first; i != NULL && folderQueueCount < max; i = i->next)
+	{
+		if(i->type != TYPE_FILE || !i->file)
+			continue;
+
+		GetExt(i->file, ext);
+
+		if(!IsAudioExt(ext))
+			continue;
+
+		GetFullPath(i, path);
+
+		if(path[0] == 0)
+			continue;
+
+		folderQueue[folderQueueCount] = strdup(path);
+
+		if(!folderQueue[folderQueueCount]) // no mem, keep what we have
+			break;
+
+		if(strcmp(path, loadedFile) == 0)
+			folderQueuePos = folderQueueCount;
+
+		folderQueueCount++;
+	}
+
+	// a queue that does not contain the song being started is of no use
+	if(folderQueuePos < 0)
+		ClearFolderQueue();
+
+	DebugMark("queue: folder holds %d audio file(s), playing #%d",
+		folderQueueCount, folderQueuePos + 1);
+}
+
+/* Mirrors the play orders of the playlist path, on the snapshot. */
+static bool FolderQueueAdvance(bool forced)
+{
+	if(folderQueueCount == 0 || folderQueuePos < 0)
+		return false;
+
+	const int order = WiiSettings.playOrder;
+
+	if(order == PLAY_SINGLE && !forced)
+		return false;
+
+	if(order == PLAY_THROUGH && !forced)
+	{
+		if(folderQueuePos + 1 >= folderQueueCount)
+			return false;
+
+		folderQueuePos++;
+	}
+	else if(order == PLAY_SHUFFLE && !forced)
+	{
+		if(folderQueueCount > 1)
+		{
+			int n = folderQueuePos;
+
+			while(n == folderQueuePos)
+				n = rand() / (RAND_MAX / folderQueueCount + 1);
+
+			folderQueuePos = n;
+		}
+	}
+	else if(order != PLAY_LOOP || forced)
+	{
+		// continuous, an explicit Next, and single or loop asked for by hand
+		folderQueuePos++;
+
+		if(folderQueuePos >= folderQueueCount)
+			folderQueuePos = 0;
+	}
+	// PLAY_LOOP on its own repeats the same song, as the playlist path does
+
+	sprintf(loadedFile, "%s", folderQueue[folderQueuePos]);
+	return true;
+}
+
 /* An explicit Next is a command, not auto-advance.
  *
  * The automatic path deliberately stops after one song in PLAY_SINGLE, which
@@ -566,10 +710,20 @@ extern "C" bool FindNextFile(bool load)
 		}
 #endif
 	}
+	else if(browserMusic.numEntries == 0)
+	{
+		// no playlist of their own: walk the folder the song was started from
+		if(!FolderQueueAdvance(forced))
+		{
+			DebugMark("next: nothing follows (folder queue %d, order %d, forced %d)",
+				folderQueueCount, WiiSettings.playOrder, (int)forced);
+			browserMusic.selIndex = NULL;
+			return false;
+		}
+	}
 	else
 	{
-		if(browserMusic.numEntries == 0 ||
-			(!forced && WiiSettings.playOrder == PLAY_SINGLE && browserMusic.selIndex != NULL))
+		if(!forced && WiiSettings.playOrder == PLAY_SINGLE && browserMusic.selIndex != NULL)
 		{
 			browserMusic.selIndex = NULL;
 			return false;

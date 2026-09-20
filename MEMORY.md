@@ -1,15 +1,19 @@
 # Project memory
 
-Last updated: 2026-09-18.
+Last updated: 2026-09-20.
 
 ## Objective and current state
 
 WiiMC-GCN-Online is now a GameCube music player with wired DHCP networking,
 Web radio over HTTP/HTTPS, and read-only LAN WebDAV. The current source builds
 successfully for GameCube and the host online suite passes 133 requests.
-Build `20260918-134405` is installed on the SD, with matching SHA-256, the
-previous DOL preserved and its ELF archived in `deployed/`. It combines
-Opus/AAC format selection fixes with the smaller, bitrate-based WebDAV cache.
+Build `20260920-174406` is installed on the SD, with the previous DOL preserved
+and its ELF archived in `deployed/`. It carries the post-1.0.0 work: the bounded
+boot gate and static address, the synchronised cache positions, the track change
+that reaches the WebDAV socket, and the folder queue that makes Continuous
+advance to the second song. Release 1.0.0 shipped the earlier, user-accepted
+build `20260918-134405`, which combined the Opus/AAC format selection fixes with
+the smaller, bitrate-based WebDAV cache.
 The user confirmed "ok tout fonctionne" on 2026-09-18 and requested release
 1.0.0 on their personal GitHub, `RyoSaeba89/WiiMC-GCN-Online`. This accepts the
 reported Opus, AAC 64 and WebDAV fixes on their console. Release the exact
@@ -100,6 +104,16 @@ No credentials belong in Git. The real WebDAV configuration is
   Reference docs: MPlayer `DOCS/tech/codecs.conf.txt`, FFmpeg 0.11 demuxing
   (`https://ffmpeg.org/doxygen/0.11/group__lavf__decoding.html`), and the
   Opus decoder API (`https://opus-codec.org/docs/opus_api-1.5/group__opus__decoder.html`).
+- Auto-advance walks `browserMusic`, which is the *playlist*, not the folder
+  being browsed. It is empty until the user presses the playlist button, so a
+  song started straight from the browser hit `numEntries == 0` and every play
+  order refused to continue; MPlayer parked in `mplayer.c:3608`
+  (`while(!filename)`) and the Next button was greyed out. `BuildFolderQueue()`
+  in `source/wiimc.cpp` now snapshots the audio files of the current listing on
+  the GUI thread, with the position of the song being started, and
+  `FindNextFile()` walks that snapshot when there is no playlist. Never walk
+  the browser list itself from the MPlayer thread: the GUI is free to free it.
+  Evidence: `logs/sd-7645D5686383-wiimc.log`, build `20260919-224342`.
 - WebDAV startup targets are now 48,000 bytes at 128 kbit/s and 120,000 bytes
   at 320 kbit/s, with a 16 KiB floor and 256 KiB ceiling for other formats.
   Unknown bitrate uses 120,000 bytes. `stream_cache_prefill` waits at the actual
@@ -114,6 +128,13 @@ No credentials belong in Git. The real WebDAV configuration is
 ## Verification state
 
 - PASS: host HTTP/WebDAV/ICY suite, 133 requests.
+- PASS: `tools/test-folder-queue.sh` compiles the production `FindNextFile()`,
+  the folder queue and the real `GetExt`/`IsAudioExt`/`GetFullPath`: twelve
+  cases over the five play orders, the forced Next, a stop request, a playlist
+  taking priority, the browser being emptied between songs, a song outside the
+  listing, and the bounded 4096-entry snapshot. The original code fails case 1.
+  NOT yet confirmed on hardware: build `20260920-174406` is on the card and
+  awaits the user's run.
 - PASS: actual GEKKO cache host tests: legacy 2 MiB/50% plus 512 KiB rings,
   three-second targets at 64/128/192/256/320 kbit/s after end-tag seeks,
   wrap, bounded refill with backward history, EOF/short tracks, one-second

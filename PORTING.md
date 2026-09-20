@@ -1857,3 +1857,55 @@ The maintainer confirmed build `20260918-134405` works on real hardware on
 binary with public examples and an installer that generates a per-installation
 TLS seed. Credentials, local logs, photographs and existing seeds are excluded.
 The fork version is independent of the retained upstream 3.0.0 settings label.
+
+### 11.25 Continuous played one song, and the queue it walked was empty
+
+The run of 2026-09-19, build `20260919-224342`, recorded in
+`logs/sd-7645D5686383-wiimc.log`, was the first to reach WebDAV music with the
+static address. It boots in 7.5 seconds, lists the 629-entry
+share in 1.9 s and a 19-entry album in 246 ms, opens
+`01 AVGN Adventures Main Theme.mp3`, fills its 512 KiB ring to 23.9% in 2.2 s
+and plays the song to its natural end. The producer reaches end of file at
+79 s, the decoder drains until 89.9 s, and the log then says:
+
+```
+mplayer: end film. UNINIT. err: 0
+[   89.934] webdav: playback closed, metadata priority gate released
+```
+
+and nothing else. The play order in `settings.xml` is `1`, Continuous. The
+second song never loaded, on that album or any other.
+
+There is no network fault behind this, and nothing WebDAV-specific either.
+The thread dump taken fourteen seconds later resolves MPlayer's `80069c74` to
+`mplayer.c:3608`, which is the `do { usleep(50000); } while(!filename)` loop at
+`play_next_file`. MPlayer had asked for the next song and been told there was
+none: `FindNextFile(true)` returned false, without hanging and without loading
+anything, and the GUI kept the screen in the browser.
+
+It returned false on its first line. For audio the GUI keeps control, so
+`controlledbygui` is 1 and the music path runs, and that path walks
+`browserMusic` -- the playlist, which is the queue the user builds with the
+playlist button, not the folder they are browsing. Starting a song straight
+from the browser leaves it empty, so `browserMusic.numEntries == 0` refused
+every play order before it was ever consulted. Continuous was continuous over
+an empty queue. The same line also greys out the Next button, which is why the
+transport had looked dead in that state.
+
+The folder a song is started from now stands in for the missing playlist.
+`BuildFolderQueue()` runs on the GUI thread, where the browser list is stable,
+and snapshots the audio files of the current listing in display order together
+with the position of the song being started. `FindNextFile()` runs on the
+MPlayer thread and walks those strings, so it never dereferences a linked list
+the browser is free to free underneath it, and the music carries on after the
+user has browsed somewhere else. An explicit playlist still wins: the snapshot
+is only built, and only consulted, when there is none. Single still stops after
+one song, Through still stops at the end of the folder, Loop still repeats,
+Shuffle stays inside the folder, and an explicit Next remains a command that
+advances whatever the mode.
+
+`tools/test-folder-queue.sh` compiles the production `FindNextFile()`, the
+folder queue and the real `GetExt`/`IsAudioExt`/`GetFullPath` on the host and
+covers those orders, the bounded 4096-entry snapshot, a stop request, a song
+that is not in the listing, and the browser being emptied and refilled between
+two songs. The original code fails its first case.

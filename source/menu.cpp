@@ -4278,6 +4278,7 @@ static void MenuBrowse(int menu)
 				}
 
 				browserMusic.selIndex = MusicPlaylistFindIndex(loadedFile);
+				BuildFolderQueue(); // stands in when they have no playlist
 
 				if(!mainWindow->Find(disabled))
 					mainWindow->Append(disabled);
@@ -4567,7 +4568,7 @@ static void MenuBrowse(int menu)
 		{
 			audiobarForwardBtn->ResetState();
 
-			if(browserMusic.numEntries > 0)
+			if(browserMusic.numEntries > 0 || FolderQueueCount() > 1)
 			{
 				if(wiiAudioOnly())
 				{
@@ -4603,17 +4604,11 @@ static void MenuBrowse(int menu)
 
 			UpdateAudiobarModeBtn();
 		}
-		if(browserMusic.numEntries > 0)
+		int queued = browserMusic.numEntries > 0 ? browserMusic.numEntries : FolderQueueCount();
+
+		if(queued > 1)
 		{
-			if(browserMusic.numEntries == 1)
-			{
-				if(audiobarForwardBtn->GetAlpha() == 255 || audiobarForwardBtn->GetState() != STATE_DISABLED)
-				{
-					audiobarForwardBtn->SetState(STATE_DISABLED);
-					audiobarForwardBtn->SetAlpha(128);
-				}
-			}
-			else if(audiobarForwardBtn->GetAlpha() == 128)
+			if(audiobarForwardBtn->GetAlpha() == 128)
 			{
 				audiobarForwardBtn->SetState(STATE_DEFAULT);
 				audiobarForwardBtn->SetAlpha(255);
