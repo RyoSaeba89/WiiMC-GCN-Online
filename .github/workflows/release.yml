@@ -26,7 +26,7 @@ jobs:
     name: Host tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -48,12 +48,16 @@ jobs:
     runs-on: ubuntu-latest
     container: ghcr.io/extremscorner/libogc2:latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install portlibs
         run: |
-          dkp-pacman -Sy --noconfirm --needed \
+          # The container already carries some of these, sometimes under
+          # another provider (ppc-libpng-apng provides ppc-libpng); -T lists
+          # only the ones nothing installed satisfies yet.
+          missing=$(dkp-pacman -T \
             ppc-mxml ppc-libexif ppc-libiconv ppc-freetype ppc-libbrotli ppc-libbz2 \
-            ppc-libjpeg-turbo ppc-libpng ppc-zlib ppc-libopus
+            ppc-libjpeg-turbo ppc-libpng ppc-zlib ppc-libopus || true)
+          if [ -n "$missing" ]; then dkp-pacman -Sy --noconfirm --needed $missing; fi
           if ! command -v zip >/dev/null; then apt-get update && apt-get install -y --no-install-recommends zip; fi
       - name: Check the tag against VERSION
         if: startsWith(github.ref, 'refs/tags/v')
@@ -83,7 +87,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           name: WiiMC-GCN-Online
