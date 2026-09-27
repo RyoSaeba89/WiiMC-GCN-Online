@@ -2,14 +2,47 @@
 
 ## Unreleased
 
+Confirmed on the maintainer's GameCube on 2026-09-27 with build
+`20260923-210855`: WebDAV playback, including the automatic change to the
+next song, and Web radio both work.
+
+### Added
+
+- Continuous, Shuffle, Loop and Through now work on a song started straight
+  from the file browser: the folder it was started from serves as the queue
+  when no playlist has been built. A playlist still takes priority.
+- The audio bar's Previous, Next and play-order buttons are enabled again. An
+  explicit Next advances even in Single mode.
+- Optional static address: `netStaticIP`, `netStaticMask` and `netStaticGW` in
+  `settings.xml` skip DHCP entirely. Leave `netStaticIP` empty to keep DHCP.
+
+### Changed
+
+- The startup network screen gives up after 30 seconds and offers Retry or
+  Continue offline, instead of waiting for DHCP indefinitely. Settings are now
+  loaded before the network starts, so local playback works without a network.
+
 ### Fixed
 
-- Continuous, Shuffle, Loop and Through did nothing after the first song when
-  it had been started from the file browser: the automatic path walked the
-  playlist, which is empty until the playlist button is used, so MPlayer was
-  told there was no next song and parked. The folder the song was started from
-  now serves as the queue when there is no playlist, and the Next button works
-  in that state too.
+- The WebDAV Buffering window remained over the second song after its
+  startup prefill finished during automatic playback. Each cache prefill now
+  closes its own progress window on completion or interruption.
+- Continuous playback stopped after the first song started from the browser:
+  MPlayer was told there was no next song and parked.
+- Stopping or changing a WebDAV track now cancels its network request instead
+  of waiting for transport timeouts. The WebDAV directory cache and error
+  reporting are safe when the GUI and the cache thread use them together.
+- The cache could stop refilling for good after reaching end of file, and its
+  64-bit read/write positions could be read half-updated by the other thread.
+  Both are fixed; the cache test suite, previously intermittent, now passes
+  reliably.
+- A reset while the TLS seed was being rewritten could leave an empty
+  `tls-seed.bin` and disable HTTPS. The seed is now replaced atomically.
+- Cancelling the network probe could leave its thread running unnoticed.
+- Every wait for MPlayer to stop now gives up after ten seconds instead of
+  freezing the menu.
+- An out-of-bounds write in the USB Gecko log path, and a NULL `memset` when
+  the MPlayer stack could not be allocated.
 
 ## 1.0.0 - 2026-09-18
 

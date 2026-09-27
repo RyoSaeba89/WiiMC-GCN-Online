@@ -4,7 +4,9 @@
 on the maintainer's GameCube after the Opus, SomaFM AAC 64 and WebDAV fixes.
 The sections below preserve the development investigation; references to
 unfinished work describe that earlier stage. See [CHANGELOG.md](CHANGELOG.md)
-and section 11.24 for the released state.
+and section 11.24 for the released state. Post-1.0.0 work (sections 11.25 and
+11.26, plus the bounded boot gate) was confirmed on the console on 2026-09-27
+with build `20260923-210855`.
 
 This fork adds two things to [SuperrSonic/WiiMC-GCN](https://github.com/SuperrSonic/WiiMC-GCN):
 **WebDAV** as a browsable network device, and **web radio** playback over HTTP
@@ -1821,6 +1823,14 @@ This is intentionally different from the later on-demand network prompt,
 which remains cancellable. The boot gate meets the product rule that no menu
 may be entered before the console has an IP.
 
+**Superseded after 1.0.0.** A silent DHCP server kept libogc2's
+`if_configex()` spinning forever, and nothing above it can interrupt that
+loop. The gate now gives up after 30 seconds (`NET_BOOT_TIMEOUT_SECS`, sized
+from this console's 11 s and 17 s DHCP timings) and offers Retry or Continue
+offline. Settings load before the gate, and `netStaticIP`, `netStaticMask`
+and `netStaticGW` in `settings.xml` take the static `if_config()` path, which
+does not wait for DHCP.
+
 ### 11.23 Final automated verification and hardware boundary
 
 On 2026-09-16, `tools/test-online.sh` passes 133 local requests covering URL
@@ -1909,3 +1919,22 @@ folder queue and the real `GetExt`/`IsAudioExt`/`GetFullPath` on the host and
 covers those orders, the bounded 4096-entry snapshot, a stop request, a song
 that is not in the listing, and the browser being emptied and refilled between
 two songs. The original code fails its first case.
+
+### 11.26 The second WebDAV song plays behind a stale buffering window
+
+The SD log from build 20260920-174406 shows the first song ending normally
+at 78.793 s. MPlayer opens the second WebDAV file at 78.931 s, reaches its
+120,000-byte startup prefill at 81.644 s (23.0% of the 512 KiB ring), and
+prints Starting playback. The heartbeat continues past 123 s. There is no
+cache stall or rebuffer wait in this transition; the remaining Buffering
+window is a GUI lifetime error. The progress bar can end below 100% because
+stream_cache_prefill() stops updating it as soon as the target is reached.
+
+The browser's first-file path calls CancelAction() after LoadNewFile(). The
+automatic next-file path runs inside MPlayer and never makes that GUI call.
+The prefill now closes the Buffering window it showed when it returns,
+including success, interruption and stall. It checks the active message so a
+concurrent unrelated progress window is not dismissed. The host cache test
+covers completion and cancellation, the 12 folder-queue cases pass, and the
+GameCube build 20260923-210855 compiles. The maintainer confirmed that build
+on the console on 2026-09-27: the WebDAV problem is fixed and the radios work.

@@ -69,6 +69,7 @@ extern bool CacheThreadAvailable();
 extern int controlledbygui;
 extern void CheckMplayerNetwork();
 extern void ShowProgress (const char *msg, int done, int total);
+extern void FinishBufferingProgress(void);
 #else
 #include <sys/wait.h>
 #define FORKED_CACHE 1
@@ -718,7 +719,11 @@ static void exit_sighandler(int x){
 int stream_cache_prefill(stream_t *stream, int min)
 {
     cache_vars_t *s = stream->cache_data;
+    int result = 1;
     if (!s) return -1;
+#ifdef GEKKO
+    int showed_progress = 0;
+#endif
     /* A second prefill can follow probing/seeking. Leave room for retained
      * history and the producer's minimum write size, or it cannot finish. */
     int forward_limit = s->buffer_size - s->back_size - s->fill_limit;
@@ -734,13 +739,16 @@ int stream_cache_prefill(stream_t *stream, int min)
     for (cache_pos_get(s, &p);
          p.read_filepos < p.min_filepos || p.max_filepos - p.read_filepos < min;
          cache_pos_get(s, &p)) {
-        if (getMESS || controlledbygui == 2 || stream_check_interrupt(0))
-            return 0;
+        if (getMESS || controlledbygui == 2 || stream_check_interrupt(0)) {
+            result = 0;
+            goto done;
+        }
         if (s->eof) break; // short file: play the remaining bytes
 #ifdef GEKKO
         if (cntReconnect == 0) {
             off_t available = p.max_filepos - p.read_filepos;
             ShowProgress("Buffering...", available > 0 ? (int)available : 0, min);
+            showed_progress = 1;
         }
 #endif
         if (p.max_filepos != last_position) {
@@ -748,16 +756,24 @@ int stream_cache_prefill(stream_t *stream, int min)
             last_progress = GetTimerMS();
         } else if (GetTimerMS() - last_progress >= 30000) {
             mp_msg(MSGT_CACHE, MSGL_ERR, "cache: prefill stalled for 30 seconds\n");
-            return -1;
+            result = -1;
+            goto done;
         }
         /* Yield even when input callbacks return immediately. */
         usec_sleep(20000);
     }
-    if (getMESS || controlledbygui == 2) return 0;
+    if (getMESS || controlledbygui == 2) {
+        result = 0;
+        goto done;
+    }
     cache_pos_get(s, &p);
     if (s->eof && p.max_filepos == p.read_filepos && s->stream->error)
-        return -1;
-    return 1;
+        result = -1;
+done:
+#ifdef GEKKO
+    if (showed_progress) FinishBufferingProgress();
+#endif
+    return result;
 }
 
 /**

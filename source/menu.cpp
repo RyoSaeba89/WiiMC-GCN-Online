@@ -2147,6 +2147,14 @@ CancelAction()
 	}
 }
 
+/* The cache prefill owns this progress window. Automatic track changes do not
+ * pass through the browser path that normally calls CancelAction(). */
+extern "C" void FinishBufferingProgress(void)
+{
+	if(showProgress == 1 && strcmp(progressMsg, gettext("Buffering...")) == 0)
+		CancelAction();
+}
+
 /****************************************************************************
  * ShowProgress
  *

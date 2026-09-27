@@ -11,6 +11,7 @@ char fileplaying[MAXPATHLEN];
 static pthread_mutex_t worker_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t worker_wake = PTHREAD_COND_INITIALIZER;
 static int suspended, polls, cancel_prefill, unavailable, read_delay;
+static int progress_active, progress_shows, progress_finishes, cancel_on_progress;
 
 void SuspendCacheThread(void)
 {
@@ -37,7 +38,19 @@ bool CacheThreadSuspended(void)
 bool CacheThreadAvailable(void) { return !unavailable; }
 void CheckMplayerNetwork(void) { assert(!"unexpected SMB recovery"); }
 void ShowProgress(const char *msg, int done, int total)
-{ (void)msg; assert(done >= 0 && total > 0); }
+{
+    (void)msg;
+    assert(done >= 0 && total > 0);
+    progress_active = 1;
+    ++progress_shows;
+    if (cancel_on_progress) cancel_prefill = 1;
+}
+void FinishBufferingProgress(void)
+{
+    assert(progress_active);
+    progress_active = 0;
+    ++progress_finishes;
+}
 void mp_msg(int mod, int lev, const char *fmt, ...)
 { (void)mod; (void)lev; (void)fmt; }
 int stream_check_interrupt(int delay)
@@ -81,6 +94,7 @@ int main(void)
     s.end_pos = 6 * 1024 * 1024;
     read_delay = 1000;
     assert(stream_enable_cache(&s, 2 * 1024 * 1024, 1024 * 1024, 0) == 1);
+    assert(progress_shows > 0 && progress_finishes == 1 && !progress_active);
     assert(MPlayerCacheFillPercent() >= 50);
     verify_read(&s, 0, 4 * 1024 * 1024); /* wrap the ring twice */
     assert(cache_stream_seek_long(&s, 12345));
@@ -151,9 +165,13 @@ int main(void)
     puts("PASS track shorter than three seconds starts at EOF");
 
     memset(&s, 0, sizeof(s)); s.end_pos = 6 * 1024 * 1024;
-    cancel_prefill = 1; polls = 0;
+    cancel_prefill = 0; cancel_on_progress = 1; polls = 0;
+    read_delay = 50000;
+    int finishes_before_cancel = progress_finishes;
     assert(stream_enable_cache(&s, 2 * 1024 * 1024, 1024 * 1024, 0) == 0);
+    assert(progress_finishes == finishes_before_cancel + 1 && !progress_active);
     assert(!s.cache_data && !s.cache_pid && CacheThreadSuspended());
+    cancel_on_progress = 0; read_delay = 1000;
     unavailable = 1;
     assert(stream_enable_cache(&s, 2 * 1024 * 1024, 1024 * 1024, 0) == -1);
     assert(!s.cache_data);

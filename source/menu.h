@@ -44,6 +44,7 @@ extern "C" {
 void	DisableVideoImg();
 void DoMPlayerGuiDraw();
 void ShowProgress (const char *msg, int done, int total);
+void FinishBufferingProgress(void);
 void SetBufferingStatus(int s);
 bool BufferingStatusSet();
 #ifdef __cplusplus

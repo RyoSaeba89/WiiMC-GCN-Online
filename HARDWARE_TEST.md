@@ -2,7 +2,9 @@
 
 Use the freshly prepared SD card. Do not edit or disclose
 `apps/wiimc/webdav.conf` while collecting logs.
-Current installed build: `20260918-134405` (2026-09-18).
+Current installed build: `20260923-210855` (2026-09-23). On 2026-09-27 the
+maintainer confirmed that WebDAV playback, including the second song and its
+Buffering window, and Web radio work on the console.
 
 ## 1.0.0 acceptance result
 
@@ -18,11 +20,15 @@ reported in the acceptance message.
 1. Insert the SD card, connect the wired adapter and boot `wiimc.dol`.
 2. Confirm that `Initializing network, please wait...` is shown in English.
 3. Press `L`, `R`, `A` and `B` while it is visible. No menu action may occur.
-4. Wait for DHCP. The dialog must disappear only when an IP has been obtained.
+4. Wait for DHCP. The dialog must disappear when an IP has been obtained.
 5. Press `Z`. Confirm that the detected adapter and a real LAN IP are shown.
+6. Optionally, boot with the cable unplugged. After 30 seconds a prompt must
+   offer Retry and Continue offline; Continue offline must open the menu with
+   SD playback available.
 
-Pass condition: the first menu cannot be used before the IP exists, and it
-becomes usable automatically afterwards.
+Pass condition: the first menu cannot be used before the IP exists or the
+user chooses to continue offline, and it becomes usable automatically once an
+address arrives. With `netStaticIP` set, no DHCP wait occurs.
 
 ## 2. HTTPS radio and RTC-independent TLS
 
@@ -114,15 +120,19 @@ pause/resume and stop while paused before proceeding with the browsing test.
    another WebDAV MP3. Check the start delay in both cases, including a
    128 kbit/s track (48,000-byte target). The player does not promise gapless
    transitions: the next track still needs opening, probing and decoding.
-2. Repeat two root/folder cycles during the second track.
-3. Stop playback and browse one new directory.
-4. Start another track, cancel while `Buffering...` is visible, then start it
+2. Confirm the Buffering window disappears as soon as the second track
+   begins to play, even if the last visible bar was incomplete. The window
+   reports progress toward the startup threshold; the 512 KiB cache continues
+   filling during playback.
+3. Repeat two root/folder cycles during the second track.
+4. Stop playback and browse one new directory.
+5. Start another track, cancel while `Buffering...` is visible, then start it
    again. The application must return to the menu and allocate a fresh cache.
 
-Pass condition: the second track receives its own three-second prefill,
-the previous audio cache is released, cached directories
-remain available for the application run, and metadata navigation is released
-normally after playback closes.
+Pass condition: the second track receives its own three-second prefill and
+the buffering window closes when it ends. The previous audio cache is released,
+cached directories remain available for the application run, and metadata
+navigation is released normally after playback closes.
 
 The cache worker should appear at public LWP priority 70 with a 64 KiB stack
 in the startup thread log. If a prefill cannot advance for 30 seconds, it must

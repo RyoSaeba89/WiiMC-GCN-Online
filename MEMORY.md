@@ -1,17 +1,21 @@
 # Project memory
 
-Last updated: 2026-09-20.
+Last updated: 2026-09-27.
 
 ## Objective and current state
 
 WiiMC-GCN-Online is now a GameCube music player with wired DHCP networking,
 Web radio over HTTP/HTTPS, and read-only LAN WebDAV. The current source builds
 successfully for GameCube and the host online suite passes 133 requests.
-Build `20260920-174406` is installed on the SD, with the previous DOL preserved
+Build `20260923-210855` is installed on the SD, with the previous DOL preserved
 and its ELF archived in `deployed/`. It carries the post-1.0.0 work: the bounded
 boot gate and static address, the synchronised cache positions, the track change
 that reaches the WebDAV socket, and the folder queue that makes Continuous
-advance to the second song. Release 1.0.0 shipped the earlier, user-accepted
+advance to the second song. It also closes the stale Buffering window when
+WebDAV prefill finishes. On 2026-09-27 the user confirmed on the console that
+this build fixed the WebDAV problem and that the radios work; the post-1.0.0
+work was pushed to GitHub under *Unreleased* in `CHANGELOG.md`.
+Release 1.0.0 shipped the earlier, user-accepted
 build `20260918-134405`, which combined the Opus/AAC format selection fixes with
 the smaller, bitrate-based WebDAV cache.
 The user confirmed "ok tout fonctionne" on 2026-09-18 and requested release
@@ -30,8 +34,11 @@ No credentials belong in Git. The real WebDAV configuration is
    verification. `MBEDTLS_HAVE_TIME_DATE` is intentionally absent because the
    GameCube RTC cannot be trusted after battery loss. This matches GCRadio's
    effective configuration; do not describe it as using an old TLS protocol.
-2. Boot is intentionally blocked by the English progress message until DHCP
-   yields a usable IP. There is no Return button and DHCP retries indefinitely.
+2. Boot is blocked by the English progress message until DHCP yields a usable
+   IP, for at most 30 seconds (`NET_BOOT_TIMEOUT_SECS`); then Retry or Continue
+   offline. libogc2's DHCP wait cannot be interrupted, so the timeout lives
+   above it; `netStaticIP` skips DHCP. Do not shorten it: a healthy DOL-015
+   takes about 11 s and a two-attempt cycle about 17 s.
 3. WebDAV stays HTTP-only because credentials are private LAN credentials and
    the current client explicitly refuses authenticated HTTPS.
 4. Playback has priority over WebDAV metadata. On 2026-09-18 the user explicitly
@@ -125,6 +132,14 @@ No credentials belong in Git. The real WebDAV configuration is
   arm its metadata gate. There is no whole-file or playlist audio preload,
   and no gapless/next-track decoder prefetch.
 
+- The SD log of build `20260920-174406`, archived as
+  `logs/sd-1F91798B9CB0-wiimc.log`, shows the second WebDAV song opening,
+  reaching its 120,000-byte prefill and starting playback while the Buffering
+  window stayed visible. The first-song GUI path calls `CancelAction()` after
+  loading; automatic advance does not. The cache prefill now closes the
+  Buffering window it opened on success, cancellation or stall, without
+  dismissing another kind of progress window.
+
 ## Verification state
 
 - PASS: host HTTP/WebDAV/ICY suite, 133 requests.
@@ -133,12 +148,13 @@ No credentials belong in Git. The real WebDAV configuration is
   cases over the five play orders, the forced Next, a stop request, a playlist
   taking priority, the browser being emptied between songs, a song outside the
   listing, and the bounded 4096-entry snapshot. The original code fails case 1.
-  NOT yet confirmed on hardware: build `20260920-174406` is on the card and
-  awaits the user's run.
+  The SD log confirms build `20260920-174406` advanced to the second song.
 - PASS: actual GEKKO cache host tests: legacy 2 MiB/50% plus 512 KiB rings,
   three-second targets at 64/128/192/256/320 kbit/s after end-tag seeks,
   wrap, bounded refill with backward history, EOF/short tracks, one-second
-  input gap, stop/next-track and cancellation.
+  input gap, stop/next-track and cancellation. The 2026-09-23 regression also
+  checks that a shown prefill window closes on completion and mid-prefill
+  cancellation.
 - PASS: `tools/test-playback-wait.sh` compiles the actual MPlayer rebuffer
   loop and checks audio refill/resume without GX, stale/unconfigured video
   outputs, stop, EOF and configured video. The original loop fails this
@@ -153,7 +169,12 @@ No credentials belong in Git. The real WebDAV configuration is
   certificate/protocol scenarios), including SHA-384 and invalid signatures.
 - PASS: actual host TLS/HTTP client receives live NightRide Opus and SomaFM
   MP3 bytes with a simulated year-2000 RTC and the SD package CA bundle.
-- PASS: complete devkitPPC/libogc2 GameCube build.
+- PASS: complete devkitPPC/libogc2 GameCube build `20260923-210855`;
+  DOL installed on the SD and its SHA-256 matches the local build.
+- PASS, USER-REPORTED HARDWARE ACCEPTANCE: build `20260923-210855`,
+  2026-09-27. The user reported that the latest fix solved the WebDAV
+  problem and that the radios also work. No SD log of that run has been
+  archived yet.
 - PASS: linked ELF contains `mbedtls_sha384_info`, `verify_without_rtc` and
   `CacheThreadAvailable`; no linked `mbedtls_x509_time_gmtime` symbol.
 - PASS, USER-REPORTED HARDWARE ACCEPTANCE: build `20260918-134405`, 2026-09-18.

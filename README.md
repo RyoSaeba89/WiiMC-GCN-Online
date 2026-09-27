@@ -13,14 +13,23 @@ The maintainer confirmed build `20260918-134405` works on a real GameCube on
 See [CHANGELOG.md](CHANGELOG.md) for the release details. The fork version is
 1.0.0; the exact tested binary keeps the upstream 3.0.0 label/settings format.
 
+The `main` branch carries post-1.0.0 fixes, listed under *Unreleased* in the
+changelog. Build `20260923-210855` of that work was confirmed on the console on
+2026-09-27: WebDAV playback with automatic advance to the next song, and radio.
+
 ## Current features
 
 - Nintendo Broadband Adapter and the ETH2GC adapters supported by libogc2
   (W6100, W5500 and ENC28J60).
-- A blocking English startup screen until DHCP supplies a usable IP address.
+- An English startup screen while DHCP runs. It gives up after 30 seconds and
+  offers Retry or Continue offline.
+- Optional static address (`netStaticIP`, `netStaticMask`, `netStaticGW` in
+  `settings.xml`), which skips DHCP entirely.
 - Web radio from `apps/wiimc/onlinemedia.xml`, including HTTP and HTTPS MP3,
   AAC and Opus streams and ICY metadata.
 - Read-only WebDAV browsing and MP3 playback over a trusted LAN.
+- Continuous, Shuffle, Loop and Through play orders over the folder a song was
+  started from, when no playlist has been built.
 - A 512 KiB circular read-ahead cache for the current WebDAV track. Playback
   starts with about three seconds of compressed audio, estimated from its
   bitrate after format/tag probing; the worker keeps filling during playback.
@@ -55,7 +64,9 @@ test -f /media/SD/apps/wiimc/tls-seed.bin || openssl rand -out /media/SD/apps/wi
 ```
 
 Boot `wiimc.dol` with your GameCube homebrew loader. Connect the wired adapter
-before launch; the menu opens once DHCP has assigned an address.
+before launch; the menu opens once DHCP has assigned an address. If no address
+arrives within 30 seconds, choose Retry or Continue offline. To skip DHCP, set
+`netStaticIP`, `netStaticMask` and `netStaticGW` in `apps/wiimc/settings.xml`.
 
 The application expects:
 
