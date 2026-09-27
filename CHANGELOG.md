@@ -4,8 +4,7 @@
 
 Confirmed on the maintainer's GameCube on 2026-09-27 with build
 `20260923-210855`: WebDAV playback, including the automatic change to the
-next song, and Web radio both work. The release binary is rebuilt from the
-same source by the new GitHub Actions pipeline.
+next song, and Web radio both work. The release ships that exact binary.
 
 ### Added
 

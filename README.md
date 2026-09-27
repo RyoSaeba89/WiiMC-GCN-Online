@@ -9,8 +9,8 @@ described in the original [video backstory](https://youtu.be/-EpUi2d2_VI).
 
 **Latest release:** [download `WiiMC-GCN-Online.zip`](https://github.com/RyoSaeba89/WiiMC-GCN-Online/releases/latest/download/WiiMC-GCN-Online.zip)
 ([all releases](https://github.com/RyoSaeba89/WiiMC-GCN-Online/releases)).
-Version 1.1.0 was confirmed on a real GameCube on 2026-09-27 (build
-`20260923-210855` from the same source): WebDAV playback with automatic advance
+Version 1.1.0 is build `20260923-210855`, confirmed on a real GameCube on
+2026-09-27: WebDAV playback with automatic advance
 to the next song, and Web radio. See [CHANGELOG.md](CHANGELOG.md) for details.
 The binary keeps the upstream 3.0.0 label/settings format; the fork version is
 in `VERSION`.
