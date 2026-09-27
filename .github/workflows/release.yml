@@ -59,6 +59,10 @@ jobs:
             ppc-libjpeg-turbo ppc-libpng ppc-zlib ppc-libopus || true)
           if [ -n "$missing" ]; then dkp-pacman -Sy --noconfirm --needed $missing; fi
           if ! command -v zip >/dev/null; then apt-get update && apt-get install -y --no-install-recommends zip; fi
+      - name: Record the toolchain
+        run: |
+          powerpc-eabi-gcc --version | head -1
+          dkp-pacman -Q | grep -E 'devkitPPC|devkitppc-gcc|devkitppc-newlib|libogc2|ppc-' | tee toolchain.txt
       - name: Check the tag against VERSION
         if: startsWith(github.ref, 'refs/tags/v')
         run: test "v$(tr -d ' \r\n' < VERSION)" = "$GITHUB_REF_NAME"
