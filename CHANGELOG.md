@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 - 2026-09-27
 
 Confirmed on the maintainer's GameCube on 2026-09-27 with build
 `20260923-210855`: WebDAV playback, including the automatic change to the
-next song, and Web radio both work.
+next song, and Web radio both work. The release binary is rebuilt from the
+same source by the new GitHub Actions pipeline.
 
 ### Added
 
@@ -21,6 +22,10 @@ next song, and Web radio both work.
 - The startup network screen gives up after 30 seconds and offers Retry or
   Continue offline, instead of waiting for DHCP indefinitely. Settings are now
   loaded before the network starts, so local playback works without a network.
+- Releases are built, tested and published by GitHub Actions from a version
+  tag. Asset names are now fixed (`WiiMC-GCN-Online.zip`, `wiimc.dol`,
+  `SHA256SUMS.txt`) so tools can find the newest version at
+  `releases/latest/download/`; the version is in `VERSION` inside the archive.
 
 ### Fixed
 

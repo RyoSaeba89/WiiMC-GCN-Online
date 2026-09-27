@@ -1,4 +1,4 @@
-# WiiMC-GCN-Online 1.0.0
+# WiiMC-GCN-Online 1.1.0
 
 WiiMC-GCN-Online turns the GameCube WiiMC port into a network-capable music
 player. It retains SD playback and adds wired networking, Web radio, HTTPS and
@@ -7,15 +7,18 @@ a read-only WebDAV music library.
 The project is based on WiiMC-SS 3.0.0 and the GameCube music-player work
 described in the original [video backstory](https://youtu.be/-EpUi2d2_VI).
 
-**Stable release:** [v1.0.0](https://github.com/RyoSaeba89/WiiMC-GCN-Online/releases/tag/v1.0.0).
-The maintainer confirmed build `20260918-134405` works on a real GameCube on
-2026-09-18, including Opus radio, SomaFM AAC 64 and WebDAV music playback.
-See [CHANGELOG.md](CHANGELOG.md) for the release details. The fork version is
-1.0.0; the exact tested binary keeps the upstream 3.0.0 label/settings format.
+**Latest release:** [download `WiiMC-GCN-Online.zip`](https://github.com/RyoSaeba89/WiiMC-GCN-Online/releases/latest/download/WiiMC-GCN-Online.zip)
+([all releases](https://github.com/RyoSaeba89/WiiMC-GCN-Online/releases)).
+Version 1.1.0 was confirmed on a real GameCube on 2026-09-27 (build
+`20260923-210855` from the same source): WebDAV playback with automatic advance
+to the next song, and Web radio. See [CHANGELOG.md](CHANGELOG.md) for details.
+The binary keeps the upstream 3.0.0 label/settings format; the fork version is
+in `VERSION`.
 
-The `main` branch carries post-1.0.0 fixes, listed under *Unreleased* in the
-changelog. Build `20260923-210855` of that work was confirmed on the console on
-2026-09-27: WebDAV playback with automatic advance to the next song, and radio.
+Releases are built and published by GitHub Actions from a `vX.Y.Z` tag. The
+asset names never change (`WiiMC-GCN-Online.zip`, `wiimc.dol`,
+`SHA256SUMS.txt`), so `releases/latest/download/<name>` always points at the
+newest version, and `VERSION` inside the archive names it.
 
 ## Current features
 
@@ -42,7 +45,7 @@ changelog. Build `20260923-210855` of that work was confirmed on the console on
 
 ## SD-card layout
 
-Download and extract `WiiMC-GCN-Online-1.0.0.zip` from the release page. From
+Download and extract `WiiMC-GCN-Online.zip` from the release page. From
 the extracted directory, use PowerShell to install it onto your SD card
 (replace `F:\` with the card's drive):
 
@@ -160,7 +163,7 @@ and [PORTING.md](PORTING.md) for design decisions and hardware evidence.
 
 ## Remaining validation boundary
 
-The 1.0.0 playback fixes have been accepted on the maintainer's console.
+The 1.0.0 and 1.1.0 playback fixes have been accepted on the maintainer's console.
 The checklist in [HARDWARE_TEST.md](HARDWARE_TEST.md) remains available for
 regression testing with other adapters, servers and streams; it does not imply
 every hardware combination has been tested. Track changes open and buffer the

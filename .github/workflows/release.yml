@@ -1,0 +1,115 @@
+# Build, test and publish WiiMC-GCN-Online.
+#
+# Pushing a tag vX.Y.Z publishes a GitHub release. Its assets always carry the
+# same names, so the newest version is always at
+#   https://github.com/RyoSaeba89/WiiMC-GCN-Online/releases/latest/download/WiiMC-GCN-Online.zip
+#   https://github.com/RyoSaeba89/WiiMC-GCN-Online/releases/latest/download/wiimc.dol
+#   https://github.com/RyoSaeba89/WiiMC-GCN-Online/releases/latest/download/SHA256SUMS.txt
+# and the version itself is the tag, and VERSION inside the archive.
+#
+# A push to main, a pull request or a manual run builds and tests only; the
+# packaged assets are then kept as a workflow artifact.
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Fetch mbedTLS for the TLS suite
+        run: |
+          git clone --depth 1 --branch v3.6.7 --recurse-submodules --shallow-submodules \
+            https://github.com/Mbed-TLS/mbedtls.git vendor/mbedtls
+          test "$(git -C vendor/mbedtls rev-parse HEAD)" = 068ff080b369adfac81509f9b57b2afabaf82dc5
+      - name: Run the suites
+        run: |
+          for t in cache folder-queue playback-wait radio-formats online tls; do
+            echo "::group::test-$t"
+            bash tools/test-$t.sh
+            echo "::endgroup::"
+          done
+
+  build:
+    name: GameCube build
+    runs-on: ubuntu-latest
+    container: ghcr.io/extremscorner/libogc2:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install portlibs
+        run: |
+          dkp-pacman -Sy --noconfirm --needed \
+            ppc-mxml ppc-libexif ppc-libiconv ppc-freetype ppc-libbrotli ppc-libbz2 \
+            ppc-libjpeg-turbo ppc-libpng ppc-zlib ppc-libopus
+          if ! command -v zip >/dev/null; then apt-get update && apt-get install -y --no-install-recommends zip; fi
+      - name: Check the tag against VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "v$(tr -d ' \r\n' < VERSION)" = "$GITHUB_REF_NAME"
+      - name: Build
+        run: bash tools/build-gc.sh -j"$(nproc)"
+      - name: Fetch the CA bundle
+        run: |
+          # Mozilla's trust store as curl publishes it (MPL 2.0), checked
+          # against curl's published digest.
+          curl -fsSL -o cacert.pem https://curl.se/ca/cacert.pem
+          curl -fsSL -o cacert.pem.sha256 https://curl.se/ca/cacert.pem.sha256
+          sha256sum -c cacert.pem.sha256
+      - name: Package
+        run: bash tools/package-release.sh cacert.pem dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WiiMC-GCN-Online
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: WiiMC-GCN-Online
+          path: dist
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          awk -v v="$version" '
+            $0 ~ "^## " v "( |$)" { on = 1; next }
+            on && /^## / { exit }
+            on { print }' CHANGELOG.md > notes.md
+          test -s notes.md || { echo "CHANGELOG.md has no section for $version" >&2; exit 1; }
+          cat >> notes.md <<'EOF'
+
+          ---
+
+          Download `WiiMC-GCN-Online.zip` and follow the README. The asset names are
+          the same in every release, so the newest one is always at
+          `releases/latest/download/WiiMC-GCN-Online.zip`. Private WebDAV settings and
+          TLS seeds are never shipped; each installation generates its own seed.
+          EOF
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "WiiMC-GCN-Online ${GITHUB_REF_NAME#v}" \
+            --notes-file notes.md --latest --verify-tag \
+            dist/WiiMC-GCN-Online.zip dist/wiimc.dol dist/SHA256SUMS.txt

@@ -14,7 +14,12 @@ that reaches the WebDAV socket, and the folder queue that makes Continuous
 advance to the second song. It also closes the stale Buffering window when
 WebDAV prefill finishes. On 2026-09-27 the user confirmed on the console that
 this build fixed the WebDAV problem and that the radios work; the post-1.0.0
-work was pushed to GitHub under *Unreleased* in `CHANGELOG.md`.
+work was released as 1.1.0 on 2026-09-27. Releases now come from
+`.github/workflows/release.yml` on a `vX.Y.Z` tag (container
+`ghcr.io/extremscorner/libogc2`), with fixed asset names
+(`WiiMC-GCN-Online.zip`, `wiimc.dol`, `SHA256SUMS.txt`) so updaters can use
+`releases/latest/download/`. Keep those names stable; the tag must equal
+`VERSION` and `CHANGELOG.md` must have a `## X.Y.Z` section.
 Release 1.0.0 shipped the earlier, user-accepted
 build `20260918-134405`, which combined the Opus/AAC format selection fixes with
 the smaller, bitrate-based WebDAV cache.
